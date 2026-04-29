@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MGKomik Auto Reaction</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:Arial;background:#0d0d1a;color:#fff;padding:16px;}
+.card{background:#16213e;border-radius:14px;padding:20px;margin-bottom:14px;}
+h2{color:#e94560;font-size:18px;margin-bottom:12px;}
+.row{display:flex;gap:8px;margin-bottom:10px;align-items:center;}
+label{font-size:12px;color:#8892a4;min-width:80px;}
+input{background:#0f3460;border:1px solid #333;border-radius:8px;padding:8px 10px;color:#fff;font-size:13px;flex:1;}
+.btn{background:#e94560;color:white;border:none;padding:12px;border-radius:10px;font-size:14px;font-weight:bold;cursor:pointer;width:100%;}
+.btn:disabled{opacity:.4;}
+.btn-stop{background:#555;}
+#log{background:#0a0a1a;border-radius:10px;padding:12px;height:320px;overflow-y:auto;font-size:11px;font-family:monospace;line-height:1.7;}
+.ok{color:#6fcf97;}
+.err{color:#f47f7f;}
+.info{color:#f9c74f;}
+.hi{color:#56cfe1;}
+.stat{display:flex;gap:10px;margin-bottom:10px;}
+.s{background:#0f3460;border-radius:8px;padding:10px;flex:1;text-align:center;font-size:12px;}
+.s b{display:block;font-size:20px;color:#e94560;}
+</style>
+</head>
+<body>
+
+<div class="card">
+  <h2>&#129302; MGKomik Auto Reaction</h2>
+
+  <div class="row">
+    <label>Username</label>
+    <input id="user" value="Nasky" placeholder="username mgkomik">
+  </div>
+  <div class="row">
+    <label>Password</label>
+    <input id="pass" type="password" value="sukasari05" placeholder="password">
+  </div>
+  <div class="row">
+    <label>Reaction</label>
+    <input id="react" value="upvote,funny,love" placeholder="upvote,funny,love">
+  </div>
+  <div class="row">
+    <label>Delay (ms)</label>
+    <input id="delay" value="1500" type="number">
+  </div>
+
+  <button class="btn" id="btnStart" onclick="startBot()">&#9654; Jalankan Bot</button>
+  <button class="btn btn-stop" id="btnStop" onclick="stopBot()" style="margin-top:8px;display:none;">&#9632; Stop</button>
+</div>
+
+<div class="stat">
+  <div class="s"><b id="cKomik">0</b>Komik</div>
+  <div class="s"><b id="cChapter">0</b>Chapter</div>
+  <div class="s"><b id="cReact">0</b>Reaction</div>
+</div>
+
+<div class="card" style="padding:12px;">
+  <div id="log"><span class="info">Siap. Tekan Jalankan Bot.</span></div>
+</div>
+
+<script>
+const BASE_KOMIK   = 'https://web.mgkomik.cc';
+const BASE_KOMEN   = 'https://komentar.mgkomik.cc';
+const LIST_URL     = 'https://web.mgkomik.cc/komik/';
+
+let running = false;
+let stats = {komik:0, chapter:0, react:0};
+
+function log(msg, cls='') {
+  const el = document.getElementById('log');
+  const d = document.createElement('div');
+  d.className = cls;
+  d.textContent = msg;
+  el.appendChild(d);
+  el.scrollTop = el.scrollHeight;
+  console.log(msg);
+}
+
+function updateStats() {
+  document.getElementById('cKomik').textContent = stats.komik;
+  document.getElementById('cChapter').textContent = stats.chapter;
+  document.getElementById('cReact').textContent = stats.react;
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+function randChoice(arr) { return arr[Math.floor(Math.random()*arr.length)]; }
+
+function getReactions() {
+  return document.getElementById('react').value.split(',').map(x=>x.trim()).filter(Boolean);
+}
+
+async function doFetch(url, opts={}) {
+  try {
+    const r = await fetch(url, {credentials:'include', ...opts});
+    return r;
+  } catch(e) {
+    return null;
+  }
+}
+
+// Login ke komentar.mgkomik.cc
+async function login() {
+  const user = document.getElementById('user').value;
+  const pass = document.getElementById('pass').value;
+  log('[*] Login...', 'info');
+  try {
+    // GET dulu untuk ambil form token
+    const r1 = await doFetch(BASE_KOMEN+'/login.php');
+    if (!r1) { log('[!] Tidak bisa akses login', 'err'); return false; }
+    const html = await r1.text();
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+    const form = doc.querySelector('form');
+    const body = new URLSearchParams();
+    body.append('username', user);
+    body.append('password', pass);
+    if (form) {
+      form.querySelectorAll('input').forEach(inp => {
+        if (inp.name && inp.name !== 'username' && inp.name !== 'password') {
+          body.append(inp.name, inp.value||'');
+        }
+      });
+    }
+    const r2 = await doFetch(BASE_KOMEN+'/login.php', {
+      method:'POST',
+      headers:{'Content-Type':'application/x-www-form-urlencoded','Referer':BASE_KOMEN+'/login.php'},
+      body: body.toString(),
+      redirect:'follow'
+    });
+    if (!r2) { log('[!] Login request gagal', 'err'); return false; }
+    const html2 = await r2.text();
+    if (r2.url.includes('profile') || html2.includes(user)) {
+      log('[✓] Login berhasil!', 'ok');
+      return true;
+    }
+    log('[!] Login mungkin berhasil, lanjut...', 'info');
+    return true;
+  } catch(e) {
+    log('[!] Login error: '+e.message, 'err');
+    return false;
+  }
+}
+
+// Ambil daftar komik dari halaman listing
+async function getKomikList() {
+  const list = [];
+  let page = 1;
+  while (running) {
+    const url = page===1 ? LIST_URL : LIST_URL+'?page='+page;
+    log('[PAGE '+page+'] '+url, 'hi');
+    const r = await doFetch(url);
+    if (!r || r.status !== 200) { log('[!] Stop listing ('+( r?r.status:'err')+')', 'err'); break; }
+    const html = await r.text();
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const title = doc.title || '';
+    log('    Title: '+title, '');
+    if (/(just a moment|cloudflare|tunggu)/i.test(title)) {
+      log('[!] CF block! Buka web.mgkomik.cc dulu di tab ini atau tab lain.', 'err');
+      break;
+    }
+    // Cari link komik
+    let links = [];
+    const sels = ['.bsx a','.bs a','.listupd a','.utao a','article a','.lds a','.anmt a'];
+    for (const sel of sels) {
+      doc.querySelectorAll(sel).forEach(a => {
+        const h = a.href||'';
+        if (h.includes('/komik/') && !h.includes('/chapter') && !h.endsWith('/komik/') && !links.includes(h)) links.push(h);
+      });
+      if (links.length) break;
+    }
+    if (!links.length) {
+      // Fallback semua a[href]
+      doc.querySelectorAll('a[href]').forEach(a => {
+        const h = a.href||'';
+        if (h.includes('/komik/') && !h.includes('/chapter') && !h.endsWith('/komik/') && !links.includes(h)) links.push(h);
+      });
+    }
+    if (!links.length) { log('[!] Tidak ada komik di page '+page+', selesai.', 'info'); break; }
+    log('    [✓] '+links.length+' komik', 'ok');
+    list.push(...links);
+    page++;
+    await sleep(1500);
+  }
+  return list;
+}
+
+// Ambil chapter dari halaman komik
+async function getChapters(url) {
+  const r = await doFetch(url);
+  if (!r || r.status!==200) return [];
+  const html = await r.text();
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  let chs = [];
+  const sels = ['#chapterlist a','.eplister a','.cl a','li.wp-manga-chapter a','a[href*="/chapter"]'];
+  for (const sel of sels) {
+    doc.querySelectorAll(sel).forEach(a => {
+      const h = a.href||'';
+      if (h.includes('/chapter') && !chs.includes(h)) chs.push(h);
+    });
+    if (chs.length) break;
+  }
+  return chs.sort();
+}
+
+// Kirim reaction
+async function sendReaction(url, reaction) {
+  const delay = parseInt(document.getElementById('delay').value)||1500;
+  try {
+    const r = await doFetch(url);
+    if (!r) return false;
+    const html = await r.text();
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+
+    // Cari post_id
+    let postId = null;
+    for (const attr of ['data-post-id','data-id','data-manga-id']) {
+      const el = doc.querySelector('['+attr+']');
+      if (el) { postId = el.getAttribute(attr); break; }
+    }
+    if (!postId) {
+      const scripts = doc.querySelectorAll('script');
+      for (const sc of scripts) {
+        const m = (sc.textContent||'').match(/["']?(?:post_id|postId)["']?[\s:=>]+["']?([\d]{3,})/);
+        if (m) { postId = m[1]; break; }
+      }
+    }
+    if (!postId) {
+      const link = doc.querySelector('link[rel="shortlink"]');
+      if (link) { const m = link.href.match(/[?&]p=(\d+)/); if(m) postId=m[1]; }
+    }
+    if (!postId) postId = url.replace(/\/$/, '').split('/').pop();
+
+    const reactionMap = {upvote:1, funny:2, love:3, surprised:4, angry:5, sad:6};
+    const rid = reactionMap[reaction]||1;
+
+    // Coba beberapa endpoint
+    const apis = [
+      BASE_KOMIK+'/api/reaction',
+      BASE_KOMIK+'/wp-json/manga/v1/reaction',
+      BASE_KOMIK+'/wp-admin/admin-ajax.php',
+    ];
+    for (const api of apis) {
+      try {
+        const rr = await fetch(api, {
+          method:'POST',
+          credentials:'include',
+          headers:{'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest','Referer':url},
+          body: JSON.stringify({post_id: postId, reaction: rid})
+        });
+        if (rr.status===200) {
+          const txt = await rr.text();
+          log('    [✓] '+reaction+' | pid='+postId+' | '+txt.slice(0,50), 'ok');
+          stats.react++;
+          updateStats();
+          await sleep(delay);
+          return true;
+        }
+      } catch(e) {}
+    }
+    log('    [✗] Semua API gagal: '+url.split('/').pop(), 'err');
+    return false;
+  } catch(e) {
+    log('    [!] '+e.message, 'err');
+    return false;
+  }
+}
+
+async function startBot() {
+  running = true;
+  stats = {komik:0, chapter:0, react:0};
+  updateStats();
+  document.getElementById('btnStart').disabled = true;
+  document.getElementById('btnStop').style.display = 'block';
+  document.getElementById('log').innerHTML = '';
+
+  const reactions = getReactions();
+  log('='.repeat(40), 'hi');
+  log('  MGKomik Auto Reaction Bot', 'hi');
+  log('  Reactions: '+reactions.join(', '), 'info');
+  log('='.repeat(40), 'hi');
+
+  // Login
+  const ok = await login();
+  if (!ok) {
+    log('[✗] Gagal login. Stop.', 'err');
+    stopBot();
+    return;
+  }
+
+  // Listing
+  log('\n[*] Ambil daftar komik...', 'info');
+  const komikList = await getKomikList();
+  log('[*] Total: '+komikList.length+' komik', 'info');
+
+  if (!komikList.length) {
+    log('[!] Tidak ada komik. Pastikan sudah buka web.mgkomik.cc sebelumnya.', 'err');
+    stopBot();
+    return;
+  }
+
+  for (let i=0; i<komikList.length && running; i++) {
+    const url = komikList[i];
+    const name = url.replace(/\/$/, '').split('/').pop();
+    stats.komik++;
+    updateStats();
+    log('\n['+(i+1)+'/'+komikList.length+'] '+name, 'hi');
+
+    // Reaction halaman komik
+    const r1 = randChoice(reactions);
+    await sendReaction(url, r1);
+
+    // Chapter
+    const chapters = await getChapters(url);
+    log('    Chapter: '+chapters.length, '');
+    for (let j=0; j<chapters.length && running; j++) {
+      stats.chapter++;
+      updateStats();
+      const r2 = randChoice(reactions);
+      log('    ['+(j+1)+'/'+chapters.length+'] '+chapters[j].split('/').pop()+' -> '+r2, '');
+      await sendReaction(chapters[j], r2);
+    }
+  }
+
+  log('\n'+'='.repeat(40), 'hi');
+  log('  SELESAI! Komik: '+stats.komik+' | Reaction: '+stats.react, 'ok');
+  log('='.repeat(40), 'hi');
+  stopBot();
+}
+
+function stopBot() {
+  running = false;
+  document.getElementById('btnStart').disabled = false;
+  document.getElementById('btnStop').style.display = 'none';
+}
+</script>
+</body>
+</html>
