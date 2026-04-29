@@ -1,5 +1,4 @@
 import cloudscraper
-import requests
 from bs4 import BeautifulSoup
 import time
 import random
@@ -27,6 +26,13 @@ KOMENTAR   = "https://komentar.mgkomik.cc"
 BASE_URL   = "https://web.mgkomik.cc"
 LIST_URL   = "https://web.mgkomik.cc/komik/"
 
+# User-Agent identik seperti browser Chrome HP
+USER_AGENT = (
+    "Mozilla/5.0 (Linux; Android 14; SM-A546E) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/124.0.0.0 Mobile Safari/537.36"
+)
+
 # =============================================
 # LOGGING
 # =============================================
@@ -38,24 +44,35 @@ def log(msg):
         f.write(msg + "\n")
 
 # =============================================
-# SESSION - pakai cloudscraper + inject cf_clearance
+# SESSION
 # =============================================
 scraper = cloudscraper.create_scraper(
     browser={"browser": "chrome", "platform": "android", "mobile": True}
 )
 scraper.headers.update({
+    "User-Agent": USER_AGENT,
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
     "Accept-Language": "id-ID,id;q=0.9,en-US;q=0.8",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
 })
 
-# Load cookies dari file jika ada
+# Load cookies dari file
 COOKIE_FILE = "cookies.json"
 if os.path.exists(COOKIE_FILE):
     with open(COOKIE_FILE) as f:
-        saved = json.load(f)
-    cf = saved.get("cf_clearance","")
-    if cf:
-        scraper.cookies.set("cf_clearance", cf, domain=".mgkomik.cc")
-        log(f"[*] Loaded cf_clearance dari {COOKIE_FILE}")
+        saved_cookies = json.load(f)
+    for k, v in saved_cookies.items():
+        # Set untuk domain web.mgkomik.cc
+        scraper.cookies.set(k, v, domain=".mgkomik.cc")
+        scraper.cookies.set(k, v, domain="web.mgkomik.cc")
+    log(f"[*] Loaded {len(saved_cookies)} cookies dari {COOKIE_FILE}")
+else:
+    log("[!] cookies.json tidak ditemukan. Jalankan: python3 set_cookies.py")
 
 # =============================================
 # LOGIN
@@ -100,7 +117,6 @@ def get_komik_list(page=1):
     urls = [
         f"{LIST_URL}?page={page}",
         f"{LIST_URL}page/{page}/",
-        f"{BASE_URL}/komik?page={page}",
     ]
     for url in urls:
         try:
@@ -111,14 +127,14 @@ def get_komik_list(page=1):
             soup = BeautifulSoup(r.text, "html.parser")
             title = soup.title.text if soup.title else "N/A"
             if "just a moment" in title.lower():
-                log(f"    [!] Masih kena Cloudflare. Perlu cf_clearance baru.")
-                log(f"    Jalankan: python3 get_cookies.py")
-                continue
+                log(f"    [!] Cloudflare masih block. Perlu update cookies.")
+                log(f"    Jalankan: python3 set_cookies.py")
+                return []
             log(f"    Title: {title}")
             links = []
             for sel in [".bsx a",".bs a","div.bsx > a",".listupd .bsx a",
                         ".seriestulist a","article a[href]",".utao .uta a",
-                        "h3 a[href]","h2 a[href]",".tt a"]:
+                        "h3 a[href]","h2 a[href]",".tt a",".uta a"]:
                 for a in soup.select(sel):
                     href = a.get("href","")
                     if href and "/komik/" in href and "/chapter" not in href:
@@ -138,7 +154,7 @@ def get_komik_list(page=1):
             if links:
                 log(f"    [✓] {len(links)} komik ditemukan")
                 return links
-            log(f"    [~] 0 komik. Sample: {str(soup.body)[:200] if soup.body else r.text[:200]}")
+            log(f"    [~] 0 komik. Sample HTML: {str(soup.body)[:400] if soup.body else r.text[:400]}")
         except Exception as e:
             log(f"    [!] Error {url}: {e}")
     return []
