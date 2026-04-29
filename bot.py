@@ -15,21 +15,22 @@ except ImportError:
 # KONFIGURASI
 # =============================================
 USERNAME    = "Nasky"
-PASSWORD    = "sukasari05"  # GANTI PASSWORD!
+PASSWORD    = "sukasari05"
 
 REACTION_TYPES = ["upvote", "funny", "love"]
 
-DELAY_REACTION   = 2
-DELAY_KOMIK      = 3
-NAV_TIMEOUT      = 120000  # 2 menit timeout navigasi
-CF_WAIT          = 15      # detik tunggu Cloudflare challenge selesai
+DELAY_REACTION = 2
+DELAY_KOMIK    = 3
+NAV_TIMEOUT    = 90000
+CF_WAIT        = 30
 
 MAX_CHAPTER = 999
 
-LOGIN_URL = "https://komentar.mgkomik.cc/login.php"
-BASE_URL  = "https://web.mgkomik.cc"
-LIST_URL  = "https://web.mgkomik.cc/komik/"
-KOMENTAR  = "https://komentar.mgkomik.cc"
+LOGIN_URL  = "https://komentar.mgkomik.cc/login.php"
+BASE_URL   = "https://web.mgkomik.cc"
+LIST_URL   = "https://web.mgkomik.cc/komik/"
+KOMENTAR   = "https://komentar.mgkomik.cc"
+COOKIE_FILE = "cookies.json"
 
 # =============================================
 # LOGGING
@@ -42,49 +43,63 @@ def log(msg):
         f.write(msg + "\n")
 
 # =============================================
-# NAVIGASI DENGAN BYPASS CLOUDFLARE
+# LOAD COOKIES
+# =============================================
+def load_cookies():
+    if not os.path.exists(COOKIE_FILE):
+        return [], ""
+    with open(COOKIE_FILE) as f:
+        data = json.load(f)
+    ua = data.pop("_user_agent", "")
+    cookies = []
+    for k, v in data.items():
+        cookies.append({
+            "name": k,
+            "value": v,
+            "domain": ".mgkomik.cc",
+            "path": "/",
+        })
+    return cookies, ua
+
+# =============================================
+# NAVIGASI SAFE
 # =============================================
 async def goto_safe(page, url, retries=3):
-    """Navigasi ke URL, tunggu Cloudflare challenge selesai."""
     for attempt in range(1, retries + 1):
         try:
-            log(f"    [nav] {url} (attempt {attempt})")
-            # Pakai domcontentloaded bukan networkidle (tidak hang di CF)
             await page.goto(url, wait_until="domcontentloaded", timeout=NAV_TIMEOUT)
-
-            # Cek apakah Cloudflare challenge muncul
-            for _ in range(CF_WAIT):
+            # Tunggu CF selesai
+            for i in range(CF_WAIT):
                 title = await page.title()
-                if "just a moment" in title.lower() or "checking" in title.lower():
-                    log(f"    [CF] Cloudflare challenge, tunggu... ({_+1}s)")
+                if any(x in title.lower() for x in ["just a moment", "tunggu", "checking", "sebentar"]):
+                    if i % 5 == 0:
+                        log(f"    [CF] {title} ({i+1}s)")
                     await asyncio.sleep(1)
-                    # Coba klik tombol verify kalau ada
-                    try:
-                        btn = await page.query_selector("input[type='button'], button[type='button']")
-                        if btn:
-                            await btn.click()
-                    except:
-                        pass
                 else:
                     break
-
             title = await page.title()
-            if "just a moment" in title.lower():
-                log(f"    [!] CF masih aktif setelah {CF_WAIT}s")
+            if any(x in title.lower() for x in ["just a moment", "tunggu", "checking"]):
+                log(f"    [!] CF masih block setelah {CF_WAIT}s")
                 if attempt < retries:
                     await asyncio.sleep(5)
                     continue
+                return False
             return True
         except Exception as e:
-            log(f"    [!] Nav error attempt {attempt}: {e}")
+            log(f"    [nav err {attempt}] {e}")
             if attempt < retries:
                 await asyncio.sleep(5)
     return False
 
 # =============================================
-# MAIN BOT
+# MAIN
 # =============================================
 async def run():
+    cookies, saved_ua = load_cookies()
+    ua = saved_ua or "Mozilla/5.0 (Linux; Android 14; SM-A546E) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+    log(f"[*] UA: {ua[:70]}")
+    log(f"[*] Cookies loaded: {len(cookies)}")
+
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
@@ -93,35 +108,34 @@ async def run():
                 "--disable-setuid-sandbox",
                 "--disable-dev-shm-usage",
                 "--disable-blink-features=AutomationControlled",
-                "--window-size=390,844",
             ]
         )
         context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Linux; Android 14; SM-A546E) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+            user_agent=ua,
             viewport={"width": 390, "height": 844},
             locale="id-ID",
             timezone_id="Asia/Jakarta",
-            extra_http_headers={
-                "Accept-Language": "id-ID,id;q=0.9,en-US;q=0.8",
-            }
+            extra_http_headers={"Accept-Language": "id-ID,id;q=0.9"}
         )
-        page = await context.new_page()
 
-        # Anti-detection
+        # Inject cookies dari HP ke context
+        if cookies:
+            await context.add_cookies(cookies)
+            log(f"[*] {len(cookies)} cookies diinjek ke browser")
+
+        page = await context.new_page()
         await page.add_init_script("""
             Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-            Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3]});
             window.chrome = {runtime: {}};
-            Object.defineProperty(navigator, 'languages', {get: () => ['id-ID', 'id', 'en-US']});
+            Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3]});
+            Object.defineProperty(navigator, 'languages', {get: () => ['id-ID','id','en-US']});
         """)
-
         if HAS_STEALTH:
             await stealth_async(page)
-            log("[*] Stealth mode aktif")
 
         # ---- LOGIN ----
         log("\n" + "="*50)
-        log(f"[*] Login ke {LOGIN_URL}")
+        log("[*] Login...")
         ok = await goto_safe(page, LOGIN_URL)
         if ok:
             try:
@@ -132,47 +146,37 @@ async def run():
                 await page.click('button[type="submit"], input[type="submit"]')
                 await asyncio.sleep(3)
                 log(f"    URL: {page.url}")
-                if "profile" in page.url:
-                    log("[✓] LOGIN BERHASIL!")
-                else:
-                    log("[!] Lanjut...")
+                log("[✓] LOGIN BERHASIL!" if "profile" in page.url else "[!] Lanjut...")
             except Exception as e:
                 log(f"[!] Login error: {e}")
 
-        # ---- AMBIL DAFTAR KOMIK ----
-        log(f"\n[*] Buka listing: {LIST_URL}")
+        # ---- LISTING KOMIK ----
+        log(f"\n[*] Listing komik dari {LIST_URL}")
         komik_list = []
         page_num = 1
 
         while True:
             url = f"{LIST_URL}?page={page_num}" if page_num > 1 else LIST_URL
-            log(f"\n[PAGE {page_num}]")
+            log(f"[PAGE {page_num}] {url}")
             ok = await goto_safe(page, url)
             if not ok:
-                log(f"    [!] Gagal buka halaman {page_num}")
+                log("[!] CF masih block. Stop.")
                 break
 
             await asyncio.sleep(2)
             title = await page.title()
             log(f"    Title: {title}")
 
-            if "just a moment" in title.lower():
-                log("    [!] Cloudflare tidak bisa dilewati. Coba lagi nanti.")
-                break
-
             links = await page.eval_on_selector_all(
                 "a[href]",
                 """els => [...new Set(
                     els.map(e=>e.href)
-                    .filter(h => h.includes('/komik/') && !h.includes('/chapter') && !h.endsWith('/komik/'))
+                    .filter(h=>h.includes('/komik/') && !h.includes('/chapter') && !h.endsWith('/komik/'))
                 )]"""
             )
-
             if not links:
-                log(f"    [!] Tidak ada komik, selesai listing.")
-                # Print 500 char HTML untuk debug
-                html = await page.content()
-                log(f"    HTML sample: {html[:500]}")
+                html_sample = await page.content()
+                log(f"    [!] 0 komik. Sample: {html_sample[:300]}")
                 break
 
             log(f"    [✓] {len(links)} komik")
@@ -186,7 +190,7 @@ async def run():
             await browser.close()
             return
 
-        # ---- PROSES TIAP KOMIK ----
+        # ---- PROSES KOMIK ----
         total = 0
         for komik_url in komik_list:
             total += 1
@@ -195,8 +199,8 @@ async def run():
             try:
                 await goto_safe(page, komik_url)
                 await asyncio.sleep(2)
+
                 r1 = random.choice(REACTION_TYPES)
-                log(f"    Reaction: {r1}")
                 await do_reaction(page, r1)
                 await asyncio.sleep(DELAY_REACTION)
 
@@ -208,9 +212,8 @@ async def run():
                 log(f"    Chapter: {len(chapters)}")
 
                 for i, ch_url in enumerate(chapters, 1):
-                    ch_name = ch_url.rstrip("/").split("/")[-1]
                     r2 = random.choice(REACTION_TYPES)
-                    log(f"    [{i}/{len(chapters)}] {ch_name} → {r2}")
+                    log(f"    [{i}/{len(chapters)}] {ch_url.split('/')[-1]} -> {r2}")
                     try:
                         await goto_safe(page, ch_url)
                         await asyncio.sleep(2)
@@ -219,9 +222,9 @@ async def run():
                     except Exception as e:
                         log(f"    [!] Skip chapter: {e}")
 
-                log(f"    ✓ Selesai: {name}")
+                log(f"    ✓ {name}")
             except Exception as e:
-                log(f"    [!] Skip komik: {e}")
+                log(f"    [!] Skip: {e}")
             await asyncio.sleep(DELAY_KOMIK)
 
         log("\n" + "="*50)
@@ -230,47 +233,30 @@ async def run():
 
 
 async def do_reaction(page, reaction_type):
-    reaction_map = {"upvote": 1, "funny": 2, "love": 3, "surprised": 4, "angry": 5, "sad": 6}
-    reaction_id = reaction_map.get(reaction_type, 1)
-    current_url = page.url
-
-    for sel in [
-        f".reaction-{reaction_type}",
-        f"[data-reaction='{reaction_type}']",
-        f"[data-type='{reaction_type}']",
-        f".reaction[data-id='{reaction_id}']",
-    ]:
+    reaction_map = {"upvote":1,"funny":2,"love":3,"surprised":4,"angry":5,"sad":6}
+    rid = reaction_map.get(reaction_type, 1)
+    url = page.url
+    for sel in [f".reaction-{reaction_type}", f"[data-reaction='{reaction_type}']", f"[data-type='{reaction_type}']"]:
         try:
             el = await page.query_selector(sel)
             if el:
                 await el.click()
-                log(f"    [✓] Klik {reaction_type}")
+                log(f"    [✓] klik {reaction_type}")
                 return
-        except:
-            pass
-
+        except: pass
     result = await page.evaluate(f"""
-        async () => {{
-            for (const api of ['/api/reaction','/wp-json/manga/v1/reaction','/reaction']) {{
-                try {{
-                    const r = await fetch(api, {{
-                        method:'POST',
-                        headers:{{'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}},
-                        body: JSON.stringify({{reaction:{reaction_id},url:'{current_url}'}})
-                    }});
-                    if(r.ok) return 'ok:'+api;
-                }} catch(e) {{}}
-            }}
-            return 'no-api';
+        async()=>{{
+          for(const a of['/api/reaction','/wp-json/manga/v1/reaction','/reaction']){{
+            try{{const r=await fetch(a,{{method:'POST',headers:{{'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}},body:JSON.stringify({{reaction:{rid},url:'{url}'}})}});if(r.ok)return'ok:'+a;}}catch(e){{}}
+          }}return'no-api';
         }}
     """)
-    log(f"    [fetch] {reaction_type} → {result}")
+    log(f"    [fetch] {reaction_type} -> {result}")
 
 
 if __name__ == "__main__":
     log("="*50)
-    log("  MGKomik Auto Reaction Bot (Playwright Stealth)")
-    log(f"  User: {USERNAME}")
-    log(f"  Stealth: {HAS_STEALTH}")
+    log("  MGKomik Auto Reaction (Playwright + Cookie Inject)")
+    log(f"  User: {USERNAME} | Stealth: {HAS_STEALTH}")
     log("="*50)
     asyncio.run(run())
