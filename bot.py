@@ -1,4 +1,4 @@
-import requests
+import cloudscraper
 from bs4 import BeautifulSoup
 import time
 import random
@@ -14,12 +14,12 @@ PASSWORD    = "sukasari05"  # GANTI PASSWORD!
 
 REACTION_TYPES = ["upvote", "funny", "love"]  # upvote funny love surprised angry sad
 
-DELAY_REACTION = 2   # detik antar reaction
-DELAY_KOMIK    = 3   # detik antar komik
-DELAY_PAGE     = 2   # detik antar halaman
+DELAY_REACTION = 2
+DELAY_KOMIK    = 3
+DELAY_PAGE     = 2
 
-MAX_PAGES   = 999  # scan semua halaman listing
-MAX_CHAPTER = 999  # semua chapter
+MAX_PAGES   = 999
+MAX_CHAPTER = 999
 
 LOGIN_URL  = "https://komentar.mgkomik.cc/login.php"
 KOMENTAR   = "https://komentar.mgkomik.cc"
@@ -37,12 +37,16 @@ def log(msg):
         f.write(msg + "\n")
 
 # =============================================
-# SESSION
+# SESSION dengan cloudscraper (bypass Cloudflare)
 # =============================================
-session = requests.Session()
-session.headers.update({
-    "User-Agent": "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+scraper = cloudscraper.create_scraper(
+    browser={
+        "browser": "chrome",
+        "platform": "android",
+        "mobile": True,
+    }
+)
+scraper.headers.update({
     "Accept-Language": "id-ID,id;q=0.9,en-US;q=0.8",
 })
 
@@ -53,7 +57,8 @@ def login():
     log("\n" + "="*50)
     log(f"[*] Login ke {LOGIN_URL}")
     try:
-        r = session.get(LOGIN_URL, timeout=20)
+        r = scraper.get(LOGIN_URL, timeout=30)
+        log(f"    GET status: {r.status_code}")
         soup = BeautifulSoup(r.text, "html.parser")
         payload = {}
         form = soup.find("form")
@@ -70,158 +75,94 @@ def login():
             "Referer": LOGIN_URL,
             "Origin": KOMENTAR,
         }
-        r2 = session.post(LOGIN_URL, data=payload, headers=h, allow_redirects=True, timeout=20)
-        log(f"    Status: {r2.status_code} | URL: {r2.url}")
-        if "profile" in r2.url or any(c in r2.text.lower() for c in ["logout","keluar","dashboard","profil",USERNAME.lower()]):
+        r2 = scraper.post(LOGIN_URL, data=payload, headers=h, allow_redirects=True, timeout=30)
+        log(f"    POST status: {r2.status_code} | URL: {r2.url}")
+        if "profile" in r2.url or any(c in r2.text.lower() for c in ["logout","keluar",USERNAME.lower(),"dashboard","profil"]):
             log("[✓] LOGIN BERHASIL!")
             return True
-        log(f"[!] Login tidak pasti, lanjut... Preview: {r2.text[:200]}")
+        log(f"[!] Lanjut... Preview: {r2.text[:200]}")
         return True
     except Exception as e:
         log(f"[✗] Error login: {e}")
         return False
 
 # =============================================
-# CARI API ENDPOINT KOMIK (auto-detect)
+# AMBIL DAFTAR KOMIK
 # =============================================
-def find_api_and_komik_list(page=1):
-    """
-    MGKomik mungkin pakai:
-    1. WordPress REST API
-    2. Custom JSON API
-    3. HTML biasa dengan server-side rendering
-    Coba semua kemungkinan.
-    """
-    links = []
-
-    # ---- CARA 1: WordPress REST API ----
-    wp_endpoints = [
-        f"{BASE_URL}/wp-json/wp/v2/posts?per_page=20&page={page}&_fields=link,slug",
-        f"{BASE_URL}/wp-json/manga/v1/comics?page={page}&per_page=20",
-        f"{BASE_URL}/wp-json/wp/v2/manga?per_page=20&page={page}&_fields=link,slug",
-        f"{BASE_URL}/wp-json/wp/v2/manhwa?per_page=20&page={page}&_fields=link,slug",
-    ]
-    for ep in wp_endpoints:
-        try:
-            r = session.get(ep, timeout=15, headers={"Accept": "application/json"})
-            if r.status_code == 200 and r.headers.get("content-type","").startswith("application/json"):
-                data = r.json()
-                if isinstance(data, list) and len(data) > 0:
-                    for item in data:
-                        url = item.get("link") or item.get("url") or item.get("permalink") or ""
-                        if url and url not in links:
-                            links.append(url)
-                    if links:
-                        log(f"    [✓] API ditemukan: {ep} ({len(links)} komik)")
-                        return links
-        except:
-            pass
-
-    # ---- CARA 2: HTML langsung dari /komik/?page=N ----
-    html_urls = [
+def get_komik_list(page=1):
+    urls = [
         f"{LIST_URL}?page={page}",
         f"{LIST_URL}page/{page}/",
         f"{BASE_URL}/komik?page={page}",
-        f"{BASE_URL}/manga?page={page}",
     ]
-    for url in html_urls:
+    for url in urls:
         try:
-            r = session.get(url, timeout=20)
+            r = scraper.get(url, timeout=30)
+            log(f"    [{r.status_code}] {url}")
             if r.status_code != 200:
                 continue
-            soup = BeautifulSoup(r.text, "html.parser")
 
-            # Coba berbagai selector
-            selectors = [
-                "a.series-title",
-                "h3.mgklnk a",
-                ".bsx a",
-                ".bs a",
-                ".bssx a",
-                ".listupd a",
-                ".seriestulist a",
-                ".utao a",
-                ".uta a",
-                "div.bsx > a",
-                "div.bs > a",
-                "article a[href]",
-                "h2 a[href]",
-                "h3 a[href]",
-            ]
-            for sel in selectors:
+            soup = BeautifulSoup(r.text, "html.parser")
+            title = soup.title.text if soup.title else "N/A"
+
+            # Cloudflare masih blocking?
+            if "just a moment" in title.lower() or "checking" in title.lower():
+                log(f"    [!] Cloudflare challenge: {title}")
+                continue
+
+            log(f"    Title: {title}")
+            links = []
+
+            # Coba semua selector populer manga site
+            for sel in [".bsx a",".bs a","div.bsx > a",".listupd .bsx a",
+                        ".seriestulist a","article a[href]",".utao .uta a",
+                        "h3 a[href]","h2 a[href]",".tt a"]:
                 for a in soup.select(sel):
                     href = a.get("href","")
-                    if href and "/chapter" not in href and "#" not in href:
+                    if href and "/komik/" in href and "/chapter" not in href:
                         full = href if href.startswith("http") else BASE_URL + href
-                        if full not in links and BASE_URL in full:
+                        if full.rstrip("/") != LIST_URL.rstrip("/") and full not in links:
                             links.append(full)
                 if links:
                     break
 
-            # Fallback: semua link yang mengandung /komik/ slug
+            # Fallback: semua a[href] yang punya /komik/slug
             if not links:
                 for a in soup.select("a[href]"):
                     href = a.get("href","")
-                    if "/komik/" in href and "/chapter" not in href:
+                    if "/komik/" in href and "/chapter" not in href and "#" not in href:
                         full = href if href.startswith("http") else BASE_URL + href
-                        # Filter: bukan halaman listing itu sendiri
                         if full.rstrip("/") != LIST_URL.rstrip("/") and full not in links:
                             links.append(full)
 
+            links = list(set(links))
             if links:
-                log(f"    [✓] HTML scrape dari {url}: {len(links)} komik")
-                return list(set(links))
+                log(f"    [✓] {len(links)} komik ditemukan")
+                return links
             else:
-                # Debug: print judul halaman
-                title = soup.find("title")
-                log(f"    [~] {url} -> 0 link | Title: {title.text if title else 'N/A'}")
+                log(f"    [~] 0 komik. HTML sample: {str(soup.body)[:300] if soup.body else r.text[:300]}")
         except Exception as e:
             log(f"    [!] Error {url}: {e}")
-
-    # ---- CARA 3: Coba fetch dengan header Accept: application/json ----
-    try:
-        r = session.get(f"{LIST_URL}?page={page}", timeout=20, headers={
-            "Accept": "application/json, text/plain, */*",
-            "X-Requested-With": "XMLHttpRequest",
-        })
-        ct = r.headers.get("content-type","")
-        if "json" in ct:
-            data = r.json()
-            log(f"    [?] JSON response: {str(data)[:200]}")
-    except:
-        pass
-
     return []
 
 # =============================================
-# AMBIL SEMUA CHAPTER DARI HALAMAN KOMIK
+# AMBIL CHAPTER
 # =============================================
 def get_chapters(komik_url):
     try:
-        r = session.get(komik_url, timeout=20)
+        r = scraper.get(komik_url, timeout=30)
         soup = BeautifulSoup(r.text, "html.parser")
         chapters = []
-
-        selectors = [
-            "#chapterlist a",
-            ".eplister a",
-            ".cl a",
-            ".chapterlist a",
-            "ul.clstyle a",
-            "div.epcheck a",
-            "li.wp-manga-chapter a",
-            "a[href*='/chapter']",
-        ]
-        for sel in selectors:
+        for sel in ["#chapterlist a",".eplister a",".cl a",".chapterlist a",
+                    "ul.clstyle a","li.wp-manga-chapter a","a[href*='/chapter']"]:
             for a in soup.select(sel):
                 href = a.get("href","")
-                if href and ("/chapter" in href or "/ch-" in href):
+                if href and "/chapter" in href:
                     full = href if href.startswith("http") else BASE_URL + href
                     if full not in chapters:
                         chapters.append(full)
             if chapters:
                 break
-
         chapters = list(set(chapters))
         chapters.sort()
         return chapters[:MAX_CHAPTER]
@@ -233,19 +174,14 @@ def get_chapters(komik_url):
 # KIRIM REACTION
 # =============================================
 def send_reaction(target_url, reaction_type):
-    reaction_map = {
-        "upvote": 1, "funny": 2, "love": 3,
-        "surprised": 4, "angry": 5, "sad": 6,
-    }
+    reaction_map = {"upvote":1,"funny":2,"love":3,"surprised":4,"angry":5,"sad":6}
     reaction_id = reaction_map.get(reaction_type, 1)
-
     try:
-        r = session.get(target_url, timeout=20)
+        r = scraper.get(target_url, timeout=30)
         soup = BeautifulSoup(r.text, "html.parser")
 
-        # Cari post_id
         post_id = None
-        for attr in ["data-post-id","data-id","data-comic-id","data-chapter-id","data-manga-id","data-entry-id"]:
+        for attr in ["data-post-id","data-id","data-comic-id","data-chapter-id","data-manga-id"]:
             el = soup.find(attrs={attr: True})
             if el:
                 post_id = el.get(attr)
@@ -253,18 +189,16 @@ def send_reaction(target_url, reaction_type):
         if not post_id:
             for script in soup.find_all("script"):
                 txt = script.string or ""
-                m = re.search(r'(?:post_id|postId|comic_id|chapter_id|entry_id|"id")["\s:=>]+["\']?([\d]{3,})', txt)
+                m = re.search(r'(?:post_id|postId|comic_id|"id")["\s:=>]+["\']?([\d]{3,})', txt)
                 if m:
                     post_id = m.group(1)
                     break
         if not post_id:
-            # Dari meta og:url atau canonical
-            for tag in [soup.find("link", {"rel":"shortlink"}), soup.find("meta", {"property":"og:url"})]:
-                if tag:
-                    m = re.search(r'[?&]p=(\d+)', tag.get("href",tag.get("content","")))
-                    if m:
-                        post_id = m.group(1)
-                        break
+            tag = soup.find("link", {"rel":"shortlink"})
+            if tag:
+                m = re.search(r'[?&]p=(\d+)', tag.get("href",""))
+                if m:
+                    post_id = m.group(1)
         if not post_id:
             post_id = target_url.rstrip("/").split("/")[-1]
 
@@ -275,23 +209,19 @@ def send_reaction(target_url, reaction_type):
             "Referer": target_url,
             "Origin": BASE_URL,
         }
-
-        endpoints = [
+        for api in [
             f"{BASE_URL}/api/reaction",
             f"{BASE_URL}/wp-json/manga/v1/reaction",
             f"{BASE_URL}/reaction",
             f"{KOMENTAR}/api/reaction",
-            f"{BASE_URL}/wp-admin/admin-ajax.php",
-        ]
-        for api in endpoints:
+        ]:
             try:
-                rr = session.post(api, json=payload, headers=req_h, timeout=10)
+                rr = scraper.post(api, json=payload, headers=req_h, timeout=15)
                 if rr.status_code == 200:
                     log(f"    [✓] {reaction_type.upper()} pid={post_id} | {rr.text[:60]}")
                     return True
             except:
                 continue
-
         log(f"    [✗] Semua API gagal: {target_url.split('/')[-1]}")
         return False
     except Exception as e:
@@ -299,17 +229,15 @@ def send_reaction(target_url, reaction_type):
         return False
 
 # =============================================
-# PROSES 1 KOMIK (reaction komik + semua chapter)
+# PROSES 1 KOMIK
 # =============================================
 def process_komik(komik_url, nomor):
     name = komik_url.rstrip("/").split("/")[-1]
     log(f"\n[{nomor}] ▶ {name}")
-
     r1 = random.choice(REACTION_TYPES)
-    log(f"    Reaction halaman komik: {r1}")
+    log(f"    Reaction komik: {r1}")
     send_reaction(komik_url, r1)
     time.sleep(DELAY_REACTION)
-
     chapters = get_chapters(komik_url)
     log(f"    Chapter: {len(chapters)}")
     for i, ch in enumerate(chapters, 1):
@@ -317,7 +245,6 @@ def process_komik(komik_url, nomor):
         log(f"    [{i}/{len(chapters)}] {ch.split('/')[-1]} → {r2}")
         send_reaction(ch, r2)
         time.sleep(DELAY_REACTION)
-
     log(f"    ✓ Selesai: {name}")
 
 # =============================================
@@ -335,19 +262,15 @@ def main():
         return
 
     total = 0
-
     for page in range(1, MAX_PAGES + 1):
-        log(f"\n{'='*50}")
+        log(f"\n{'='*40}")
         log(f"[PAGE {page}] Mengambil daftar komik...")
-        komik_list = find_api_and_komik_list(page)
-
+        komik_list = get_komik_list(page)
         if not komik_list:
             log(f"[!] Halaman {page} kosong. Selesai.")
             break
-
-        log(f"    {len(komik_list)} komik di halaman {page}")
+        log(f"    {len(komik_list)} komik")
         time.sleep(DELAY_PAGE)
-
         for komik_url in komik_list:
             total += 1
             try:
