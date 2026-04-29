@@ -16,22 +16,21 @@ REACTION_TYPES = ["upvote", "funny", "love"]  # upvote funny love surprised angr
 
 DELAY_REACTION = 2
 DELAY_KOMIK    = 3
-DELAY_PAGE     = 2
 
-MAX_PAGES   = 999
 MAX_CHAPTER = 999
 
 LOGIN_URL  = "https://komentar.mgkomik.cc/login.php"
 KOMENTAR   = "https://komentar.mgkomik.cc"
 BASE_URL   = "https://web.mgkomik.cc"
-LIST_URL   = "https://web.mgkomik.cc/komik/"
 
-# User-Agent identik seperti browser Chrome HP
-USER_AGENT = (
-    "Mozilla/5.0 (Linux; Android 14; SM-A546E) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/124.0.0.0 Mobile Safari/537.36"
-)
+# Sitemap URL candidates (tidak diproteksi Cloudflare biasanya)
+SITEMAP_URLS = [
+    "https://web.mgkomik.cc/sitemap.xml",
+    "https://web.mgkomik.cc/sitemap_index.xml",
+    "https://web.mgkomik.cc/wp-sitemap.xml",
+    "https://web.mgkomik.cc/wp-sitemap-posts-wp-manga-1.xml",
+    "https://web.mgkomik.cc/manga-sitemap.xml",
+]
 
 # =============================================
 # LOGGING
@@ -50,29 +49,18 @@ scraper = cloudscraper.create_scraper(
     browser={"browser": "chrome", "platform": "android", "mobile": True}
 )
 scraper.headers.update({
-    "User-Agent": USER_AGENT,
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    "User-Agent": "Mozilla/5.0 (Linux; Android 14; SM-A546E) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
     "Accept-Language": "id-ID,id;q=0.9,en-US;q=0.8",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Connection": "keep-alive",
-    "Upgrade-Insecure-Requests": "1",
-    "Sec-Fetch-Dest": "document",
-    "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-Site": "none",
 })
 
-# Load cookies dari file
+# Load cookies
 COOKIE_FILE = "cookies.json"
 if os.path.exists(COOKIE_FILE):
     with open(COOKIE_FILE) as f:
         saved_cookies = json.load(f)
     for k, v in saved_cookies.items():
-        # Set untuk domain web.mgkomik.cc
         scraper.cookies.set(k, v, domain=".mgkomik.cc")
-        scraper.cookies.set(k, v, domain="web.mgkomik.cc")
     log(f"[*] Loaded {len(saved_cookies)} cookies dari {COOKIE_FILE}")
-else:
-    log("[!] cookies.json tidak ditemukan. Jalankan: python3 set_cookies.py")
 
 # =============================================
 # LOGIN
@@ -82,7 +70,6 @@ def login():
     log(f"[*] Login ke {LOGIN_URL}")
     try:
         r = scraper.get(LOGIN_URL, timeout=30)
-        log(f"    GET status: {r.status_code}")
         soup = BeautifulSoup(r.text, "html.parser")
         payload = {}
         form = soup.find("form")
@@ -94,70 +81,106 @@ def login():
                     payload[n] = v
         payload["username"] = USERNAME
         payload["password"] = PASSWORD
-        h = {
+        r2 = scraper.post(LOGIN_URL, data=payload, headers={
             "Content-Type": "application/x-www-form-urlencoded",
             "Referer": LOGIN_URL,
             "Origin": KOMENTAR,
-        }
-        r2 = scraper.post(LOGIN_URL, data=payload, headers=h, allow_redirects=True, timeout=30)
-        log(f"    POST status: {r2.status_code} | URL: {r2.url}")
-        if "profile" in r2.url or any(c in r2.text.lower() for c in ["logout","keluar",USERNAME.lower(),"dashboard","profil"]):
+        }, allow_redirects=True, timeout=30)
+        log(f"    {r2.status_code} | {r2.url}")
+        if "profile" in r2.url or any(c in r2.text.lower() for c in ["logout",USERNAME.lower(),"profil"]):
             log("[✓] LOGIN BERHASIL!")
             return True
-        log(f"[!] Lanjut... Preview: {r2.text[:200]}")
+        log("[!] Lanjut...")
         return True
     except Exception as e:
-        log(f"[✗] Error login: {e}")
+        log(f"[✗] {e}")
         return False
 
 # =============================================
-# AMBIL DAFTAR KOMIK
+# AMBIL KOMIK DARI SITEMAP XML
 # =============================================
-def get_komik_list(page=1):
-    urls = [
-        f"{LIST_URL}?page={page}",
-        f"{LIST_URL}page/{page}/",
-    ]
-    for url in urls:
+def get_komik_from_sitemap():
+    """Coba semua sitemap URL. Sitemap XML tidak diblokir Cloudflare."""
+    all_links = []
+
+    for sm_url in SITEMAP_URLS:
         try:
-            r = scraper.get(url, timeout=30)
-            log(f"    [{r.status_code}] {url}")
+            r = scraper.get(sm_url, timeout=30)
+            log(f"    [{r.status_code}] {sm_url}")
             if r.status_code != 200:
                 continue
-            soup = BeautifulSoup(r.text, "html.parser")
-            title = soup.title.text if soup.title else "N/A"
-            if "just a moment" in title.lower():
-                log(f"    [!] Cloudflare masih block. Perlu update cookies.")
-                log(f"    Jalankan: python3 set_cookies.py")
-                return []
-            log(f"    Title: {title}")
-            links = []
-            for sel in [".bsx a",".bs a","div.bsx > a",".listupd .bsx a",
-                        ".seriestulist a","article a[href]",".utao .uta a",
-                        "h3 a[href]","h2 a[href]",".tt a",".uta a"]:
-                for a in soup.select(sel):
-                    href = a.get("href","")
-                    if href and "/komik/" in href and "/chapter" not in href:
-                        full = href if href.startswith("http") else BASE_URL + href
-                        if full.rstrip("/") != LIST_URL.rstrip("/") and full not in links:
-                            links.append(full)
-                if links:
-                    break
-            if not links:
-                for a in soup.select("a[href]"):
-                    href = a.get("href","")
-                    if "/komik/" in href and "/chapter" not in href and "#" not in href:
-                        full = href if href.startswith("http") else BASE_URL + href
-                        if full.rstrip("/") != LIST_URL.rstrip("/") and full not in links:
-                            links.append(full)
-            links = list(set(links))
-            if links:
-                log(f"    [✓] {len(links)} komik ditemukan")
-                return links
-            log(f"    [~] 0 komik. Sample HTML: {str(soup.body)[:400] if soup.body else r.text[:400]}")
+
+            ct = r.headers.get("content-type","")
+            # Kalau ini sitemap index, cari sub-sitemap
+            if "xml" in ct or sm_url.endswith(".xml"):
+                soup = BeautifulSoup(r.text, "xml")
+
+                # Sitemap index
+                sub_sitemaps = [loc.text for loc in soup.find_all("loc") if "sitemap" in loc.text.lower()]
+                if sub_sitemaps:
+                    log(f"    Found sitemap index, sub-sitemaps: {len(sub_sitemaps)}")
+                    for sub in sub_sitemaps:
+                        if "manga" in sub.lower() or "komik" in sub.lower() or "comic" in sub.lower():
+                            try:
+                                r2 = scraper.get(sub, timeout=30)
+                                soup2 = BeautifulSoup(r2.text, "xml")
+                                for loc in soup2.find_all("loc"):
+                                    url = loc.text
+                                    if "/komik/" in url and "/chapter" not in url:
+                                        if url not in all_links:
+                                            all_links.append(url)
+                            except:
+                                pass
+
+                # Langsung komik di sitemap ini
+                for loc in soup.find_all("loc"):
+                    url = loc.text
+                    if "/komik/" in url and "/chapter" not in url and url not in all_links:
+                        all_links.append(url)
+
+                if all_links:
+                    log(f"    [✓] {len(all_links)} komik dari sitemap")
+                    return all_links
+
         except Exception as e:
-            log(f"    [!] Error {url}: {e}")
-    return []
+            log(f"    [!] Error {sm_url}: {e}")
+
+    # Fallback: coba ambil dari API WordPress
+    log("\n[*] Coba WP REST API...")
+    page = 1
+    while True:
+        try:
+            api_urls = [
+                f"{BASE_URL}/wp-json/wp/v2/wp-manga?per_page=100&page={page}&_fields=link",
+                f"{BASE_URL}/wp-json/wp/v2/manga?per_page=100&page={page}&_fields=link",
+                f"{BASE_URL}/wp-json/wp/v2/posts?per_page=100&page={page}&_fields=link&categories_exclude=0",
+            ]
+            found = False
+            for api in api_urls:
+                r = scraper.get(api, timeout=30, headers={"Accept": "application/json"})
+                if r.status_code == 200:
+                    try:
+                        data = r.json()
+                        if isinstance(data, list) and len(data) > 0:
+                            for item in data:
+                                url = item.get("link","")
+                                if url and url not in all_links:
+                                    all_links.append(url)
+                            log(f"    [API pg{page}] +{len(data)} komik")
+                            found = True
+                            break
+                    except:
+                        pass
+            if not found:
+                break
+            page += 1
+            if page > 50:
+                break
+        except Exception as e:
+            log(f"    [!] API error: {e}")
+            break
+
+    return all_links
 
 # =============================================
 # AMBIL CHAPTER
@@ -165,6 +188,9 @@ def get_komik_list(page=1):
 def get_chapters(komik_url):
     try:
         r = scraper.get(komik_url, timeout=30)
+        if r.status_code == 403:
+            log(f"    [!] 403 chapter page: {komik_url.split('/')[-1]}")
+            return []
         soup = BeautifulSoup(r.text, "html.parser")
         chapters = []
         for sel in ["#chapterlist a",".eplister a",".cl a",".chapterlist a",
@@ -271,23 +297,21 @@ def main():
     if not login():
         log("[✗] Gagal login. Stop.")
         return
+    log("\n[*] Mengambil daftar komik dari sitemap...")
+    komik_list = get_komik_from_sitemap()
+    log(f"[*] Total komik ditemukan: {len(komik_list)}")
+    if not komik_list:
+        log("[!] Tidak ada komik ditemukan. Stop.")
+        log("    Kemungkinan: semua endpoint diblok Cloudflare.")
+        return
     total = 0
-    for page in range(1, MAX_PAGES + 1):
-        log(f"\n{'='*40}")
-        log(f"[PAGE {page}] Mengambil daftar komik...")
-        komik_list = get_komik_list(page)
-        if not komik_list:
-            log(f"[!] Halaman {page} kosong. Selesai.")
-            break
-        log(f"    {len(komik_list)} komik")
-        time.sleep(DELAY_PAGE)
-        for komik_url in komik_list:
-            total += 1
-            try:
-                process_komik(komik_url, total)
-            except Exception as e:
-                log(f"    [!] Skip: {e}")
-            time.sleep(DELAY_KOMIK)
+    for komik_url in komik_list:
+        total += 1
+        try:
+            process_komik(komik_url, total)
+        except Exception as e:
+            log(f"    [!] Skip: {e}")
+        time.sleep(DELAY_KOMIK)
     log("\n" + "="*50)
     log(f"  SELESAI! Total komik: {total}")
     log("="*50)

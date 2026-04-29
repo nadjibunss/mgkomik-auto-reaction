@@ -1,36 +1,41 @@
+"""Debug: cek semua sitemap dan API endpoints"""
 import cloudscraper
 from bs4 import BeautifulSoup
-
-LIST_URL = "https://web.mgkomik.cc/komik/"
-BASE_URL = "https://web.mgkomik.cc"
+import json
 
 scraper = cloudscraper.create_scraper(
     browser={"browser": "chrome", "platform": "android", "mobile": True}
 )
+scraper.headers.update({
+    "User-Agent": "Mozilla/5.0 (Linux; Android 14; SM-A546E) AppleWebKit/537.36 Chrome/124.0.0.0 Mobile Safari/537.36"
+})
 
-print("[1] Fetch halaman listing komik...")
-r = scraper.get(LIST_URL, timeout=30)
-print(f"Status: {r.status_code}")
-print(f"Content-Type: {r.headers.get('content-type')}")
-print(f"URL akhir: {r.url}")
+import os
+if os.path.exists("cookies.json"):
+    with open("cookies.json") as f:
+        for k,v in json.load(f).items():
+            scraper.cookies.set(k, v, domain=".mgkomik.cc")
+    print("[OK] Cookies loaded")
 
-from bs4 import BeautifulSoup
-soup = BeautifulSoup(r.text, "html.parser")
-print(f"Title: {soup.title.text if soup.title else 'N/A'}")
+urls_to_test = [
+    "https://web.mgkomik.cc/sitemap.xml",
+    "https://web.mgkomik.cc/sitemap_index.xml",
+    "https://web.mgkomik.cc/wp-sitemap.xml",
+    "https://web.mgkomik.cc/wp-sitemap-posts-wp-manga-1.xml",
+    "https://web.mgkomik.cc/robots.txt",
+    "https://web.mgkomik.cc/wp-json/wp/v2/wp-manga?per_page=3&_fields=link",
+    "https://web.mgkomik.cc/wp-json/wp/v2/manga?per_page=3&_fields=link",
+]
 
-print("\n[2] Link /komik/ ditemukan:")
-links = []
-for a in soup.select("a[href]"):
-    href = a.get("href","")
-    if "/komik/" in href and "/chapter" not in href:
-        full = href if href.startswith("http") else BASE_URL + href
-        if full.rstrip("/") != LIST_URL.rstrip("/") and full not in links:
-            links.append(full)
-            print(" ", full)
-print(f"Total: {len(links)}")
-
-print("\n[3] HTML body (1500 char):")
-if soup.body:
-    print(str(soup.body)[:1500])
-else:
-    print(r.text[:1500])
+for url in urls_to_test:
+    try:
+        r = scraper.get(url, timeout=15)
+        ct = r.headers.get("content-type","")
+        preview = r.text[:200].replace("\n"," ")
+        print(f"[{r.status_code}] {url}")
+        print(f"  CT: {ct}")
+        print(f"  Preview: {preview}")
+        print()
+    except Exception as e:
+        print(f"[ERR] {url}: {e}")
+        print()
