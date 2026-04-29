@@ -1,9 +1,10 @@
 """
-Cookie Bridge v3 - Fix CORS + SyntaxError
-1. python3 cookie_bridge.py
-2. Buka link di HP Chrome
-3. Tekan Aktifkan Bot
-4. Bot jalan otomatis
+Cookie Bridge v4 - Manual JS cookies
+Cara kerja:
+1. python3 cookie_bridge.py  -> muncul link
+2. Buka web.mgkomik.cc di HP sampai halaman komik muncul
+3. Di address bar ketik: javascript:fetch('http://IP:8899/cookies',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({cookies:document.cookie,ua:navigator.userAgent})}).then(r=>r.json()).then(d=>alert(d.ok?'BOT AKTIF!':'Error:'+d.msg))
+4. Bot langsung jalan!
 """
 
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -11,97 +12,6 @@ import json, os, threading, subprocess, urllib.request
 
 PORT = 8899
 COOKIE_FILE = "cookies.json"
-
-BRIDGE_HTML_TEMPLATE = """<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MGKomik Bot Bridge</title>
-<style>
-*{box-sizing:border-box;margin:0;padding:0;}
-body{font-family:Arial,sans-serif;background:#0d0d1a;color:#fff;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px;}
-.card{background:#16213e;border-radius:20px;padding:32px 24px;width:100%;max-width:400px;text-align:center;box-shadow:0 8px 40px rgba(0,0,0,0.6);}
-h2{color:#e94560;font-size:24px;margin-bottom:8px;}
-.sub{color:#8892a4;font-size:13px;line-height:1.7;margin-bottom:24px;}
-.btn{background:#e94560;color:#fff;border:none;padding:16px;border-radius:12px;font-size:16px;font-weight:bold;cursor:pointer;width:100%;letter-spacing:.5px;transition:opacity .2s;}
-.btn:disabled{opacity:.4;cursor:not-allowed;}
-.box{margin-top:16px;padding:14px 16px;border-radius:10px;font-size:13px;line-height:1.6;display:none;}
-.wait{background:#2d2000;border:1px solid #f39c12;color:#f9c74f;display:block;}
-.ok{background:#0d2e1a;border:1px solid #27ae60;color:#6fcf97;display:block;}
-.err{background:#2e0d0d;border:1px solid #e74c3c;color:#f47f7f;display:block;}
-</style>
-</head>
-<body>
-<div class="card">
-  <h2>&#129302; MGKomik Bot</h2>
-  <p class="sub">Klik tombol di bawah.<br>Browser akan buka <b>web.mgkomik.cc</b>,<br>tunggu CF selesai, lalu bot aktif otomatis.</p>
-  <button class="btn" id="btn" onclick="bridge()">&#128273; Aktifkan Bot</button>
-  <div class="box" id="box"></div>
-</div>
-<script>
-const API = 'http://__SERVER_IP__:__PORT__';
-
-function show(cls, html) {
-  const b = document.getElementById('box');
-  b.className = 'box ' + cls;
-  b.innerHTML = html;
-}
-
-async function bridge() {
-  document.getElementById('btn').disabled = true;
-  show('wait', '&#9203; <b>Step 1/3:</b> Membuka web.mgkomik.cc...<br><small>Izinkan popup jika diminta!</small>');
-
-  const pw = window.open('https://web.mgkomik.cc/komik/', 'cf_window', 'width=420,height=650');
-  if (!pw) {
-    show('err', '&#10060; <b>Popup diblok!</b><br>Izinkan popup untuk halaman ini lalu coba lagi.<br><small>Settings > Site Settings > Pop-ups</small>');
-    document.getElementById('btn').disabled = false;
-    return;
-  }
-
-  show('wait', '&#9203; <b>Step 2/3:</b> Menunggu Cloudflare...<br><small>Jangan tutup popup!</small>');
-  let title = '';
-  for (let i = 1; i <= 40; i++) {
-    await sleep(1000);
-    try {
-      title = pw.document.title || '';
-      if (title && !/(just a moment|tunggu|checking|sebentar)/i.test(title)) {
-        show('wait', `&#9203; <b>Step 2/3:</b> CF selesai! (${i}s)<br><small>${title}</small>`);
-        break;
-      }
-      show('wait', `&#9203; <b>Step 2/3:</b> Menunggu CF... (${i}s)<br><small>${title || 'loading...'}</small>`);
-    } catch(e) {
-      show('wait', `&#9203; <b>Step 2/3:</b> Loading... (${i}s)`);
-    }
-  }
-
-  show('wait', '&#9203; <b>Step 3/3:</b> Mengirim signal ke server...');
-  await sleep(500);
-
-  try {
-    const r = await fetch(API + '/trigger', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ua: navigator.userAgent, title: title})
-    });
-    const d = await r.json();
-    if (d.ok) {
-      try { pw.close(); } catch(e) {}
-      show('ok', '&#10003; <b>Berhasil! Bot sudah aktif di server.</b><br><small>Cek terminal server kamu.</small>');
-    } else {
-      show('err', '&#10060; Server error: ' + (d.msg || 'unknown'));
-      document.getElementById('btn').disabled = false;
-    }
-  } catch(e) {
-    show('err', '&#10060; <b>Tidak bisa connect:</b> ' + e.message + '<br><small>Pastikan cookie_bridge.py masih jalan.</small>');
-    document.getElementById('btn').disabled = false;
-  }
-}
-
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-</script>
-</body>
-</html>"""
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -122,7 +32,97 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path in ("/", "/bridge"):
-            html = BRIDGE_HTML_TEMPLATE.replace("__SERVER_IP__", Handler.server_ip).replace("__PORT__", str(PORT))
+            ip = Handler.server_ip
+            js_cmd = f"javascript:fetch('http://{ip}:{PORT}/cookies',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{cookies:document.cookie,ua:navigator.userAgent}})}}).then(r=>r.json()).then(d=>alert(d.ok?'BOT AKTIF! Cek terminal server':'Error: '+d.msg))"
+            html = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MGKomik Bot Bridge</title>
+<style>
+*{{box-sizing:border-box;margin:0;padding:0;}}
+body{{font-family:Arial;background:#0d0d1a;color:#fff;min-height:100vh;padding:20px;display:flex;align-items:flex-start;justify-content:center;}}
+.card{{background:#16213e;border-radius:16px;padding:24px;width:100%;max-width:440px;margin-top:30px;}}
+h2{{color:#e94560;font-size:20px;margin-bottom:6px;text-align:center;}}
+.step{{background:#0f3460;border-radius:10px;padding:14px;margin:12px 0;font-size:13px;line-height:1.8;}}
+.step b{{color:#e94560;font-size:14px;}}
+.num{{background:#e94560;color:white;border-radius:50%;width:22px;height:22px;display:inline-flex;align-items:center;justify-content:center;font-weight:bold;margin-right:6px;font-size:12px;}}
+.code{{background:#0a0a1a;border:1px solid #333;border-radius:8px;padding:10px;font-size:11px;word-break:break-all;color:#6fcf97;margin-top:8px;cursor:pointer;user-select:all;}}
+.btn{{background:#e94560;color:white;border:none;padding:14px;border-radius:10px;font-size:15px;font-weight:bold;cursor:pointer;width:100%;margin-top:4px;}}
+.note{{color:#8892a4;font-size:11px;margin-top:6px;text-align:center;}}
+.ok{{background:#0d2e1a;border:1px solid #27ae60;color:#6fcf97;border-radius:8px;padding:12px;margin-top:10px;display:none;text-align:center;}}
+</style>
+</head>
+<body>
+<div class="card">
+  <h2>&#129302; MGKomik Bot Setup</h2>
+
+  <div class="step">
+    <span class="num">1</span><b>Buka web.mgkomik.cc</b><br>
+    Klik tombol di bawah:
+    <a href="https://web.mgkomik.cc/komik/" target="_blank">
+      <button class="btn" style="margin-top:10px;">&#127760; Buka MGKomik</button>
+    </a>
+    <div class="note">Tunggu sampai halaman komik muncul (CF selesai)</div>
+  </div>
+
+  <div class="step">
+    <span class="num">2</span><b>Kirim cookies ke server</b><br>
+    Setelah halaman MGKomik terbuka, ketik/paste kode ini di <b>address bar</b> browser dan tekan Enter:
+    <div class="code" onclick="copyJS()" id="jscode">{js_cmd}</div>
+    <div class="note">&#128077; Klik kode di atas untuk copy otomatis</div>
+  </div>
+
+  <div class="step">
+    <span class="num">3</span><b>Atau klik tombol ini</b> (kalau masih di tab yg sama):<br>
+    <button class="btn" onclick="sendNow()" style="margin-top:10px;">&#128273; Kirim Cookies Sekarang</button>
+    <div class="note">Hanya works kalau kamu sudah buka web.mgkomik.cc sebelumnya</div>
+  </div>
+
+  <div class="ok" id="ok">&#10003; <b>Cookies terkirim! Bot sedang jalan di server.</b></div>
+</div>
+
+<script>
+const API = 'http://{ip}:{PORT}';
+
+async function sendNow() {{
+  try {{
+    const r = await fetch(API + '/cookies', {{
+      method: 'POST',
+      headers: {{'Content-Type': 'application/json'}},
+      body: JSON.stringify({{cookies: document.cookie, ua: navigator.userAgent}})
+    }});
+    const d = await r.json();
+    if (d.ok) {{
+      document.getElementById('ok').style.display = 'block';
+      alert('BOT AKTIF! Cek terminal server');
+    }} else {{
+      alert('Error: ' + d.msg);
+    }}
+  }} catch(e) {{
+    alert('Tidak bisa connect ke server: ' + e.message);
+  }}
+}}
+
+function copyJS() {{
+  const txt = document.getElementById('jscode').innerText;
+  navigator.clipboard.writeText(txt).then(() => {{
+    alert('Kode berhasil dicopy! Sekarang:\n1. Buka tab web.mgkomik.cc\n2. Tap address bar\n3. Hapus semua, paste kode\n4. Tekan Enter');
+  }}).catch(() => {{
+    // Select all
+    const el = document.getElementById('jscode');
+    const sel = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    sel.removeAllRanges();
+    sel.addRange(range);
+    alert('Teks sudah diselect. Tekan Copy lalu paste di address bar MGKomik.');
+  }});
+}}
+</script>
+</body>
+</html>"""
             self._html(html)
         elif self.path == "/ping":
             self._json({"ok": True, "msg": "pong"})
@@ -139,28 +139,7 @@ class Handler(BaseHTTPRequestHandler):
         except:
             data = {}
 
-        if self.path == "/trigger":
-            ua    = data.get("ua", "")
-            title = data.get("title", "")
-            print(f"[*] Trigger dari HP")
-            print(f"    UA    : {ua[:80]}")
-            print(f"    Title : {title}")
-
-            cookies = {}
-            if os.path.exists(COOKIE_FILE):
-                try:
-                    with open(COOKIE_FILE) as f:
-                        cookies = json.load(f)
-                except:
-                    pass
-            cookies["_user_agent"] = ua
-            with open(COOKIE_FILE, "w") as f:
-                json.dump(cookies, f, indent=2)
-
-            _start_bot()
-            self._json({"ok": True, "msg": "Bot berhasil dijalankan!"})
-
-        elif self.path == "/cookies":
+        if self.path == "/cookies":
             raw = data.get("cookies", "")
             ua  = data.get("ua", "")
             parsed = {}
@@ -169,15 +148,33 @@ class Handler(BaseHTTPRequestHandler):
                 if "=" in part:
                     k, _, v = part.partition("=")
                     parsed[k.strip()] = v.strip()
-            print(f"[*] Cookies: {list(parsed.keys())}")
+            print(f"[*] Cookies diterima: {list(parsed.keys())}")
+            print(f"[*] cf_clearance: {'cf_clearance' in parsed}")
             if ua:
                 parsed["_user_agent"] = ua
             with open(COOKIE_FILE, "w") as f:
                 json.dump(parsed, f, indent=2)
+            print(f"[*] Disimpan ke {COOKIE_FILE}")
+            _start_bot()
+            self._json({"ok": True, "msg": f"Bot aktif! Cookies: {len(parsed)}, cf_clearance: {'cf_clearance' in parsed}"})
+
+        elif self.path == "/trigger":
+            ua = data.get("ua", "")
+            if ua:
+                cookies = {}
+                if os.path.exists(COOKIE_FILE):
+                    try:
+                        with open(COOKIE_FILE) as f:
+                            cookies = json.load(f)
+                    except: pass
+                cookies["_user_agent"] = ua
+                with open(COOKIE_FILE, "w") as f:
+                    json.dump(cookies, f, indent=2)
+            _start_bot()
             self._json({"ok": True})
 
         else:
-            self._json({"ok": False, "msg": "endpoint not found"}, 404)
+            self._json({"ok": False, "msg": "not found"}, 404)
 
     def _html(self, html):
         b = html.encode()
@@ -226,17 +223,10 @@ def get_ip():
 if __name__ == "__main__":
     ip = get_ip()
     Handler.server_ip = ip
-
     print("=" * 50)
-    print("  MGKomik Cookie Bridge v3")
+    print("  MGKomik Cookie Bridge v4")
     print("=" * 50)
-    print(f"\n  \U0001f4f1 BUKA DI CHROME HP:")
-    print(f"\n     http://{ip}:{PORT}")
-    print(f"\n  \U0001f9ea Ping test: http://{ip}:{PORT}/ping")
+    print(f"\n  BUKA DI CHROME HP: http://{ip}:{PORT}")
+    print(f"  Ping test: http://{ip}:{PORT}/ping")
     print("=" * 50)
-    print()
-    server = HTTPServer(("0.0.0.0", PORT), Handler)
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        print("\n[*] Stop.")
+    HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
