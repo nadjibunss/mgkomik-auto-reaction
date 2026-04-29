@@ -1,5 +1,5 @@
 """
-Cookie Bridge v3 - Fix CORS + endpoint
+Cookie Bridge v3 - Fix CORS + SyntaxError
 1. python3 cookie_bridge.py
 2. Buka link di HP Chrome
 3. Tekan Aktifkan Bot
@@ -12,7 +12,7 @@ import json, os, threading, subprocess, urllib.request
 PORT = 8899
 COOKIE_FILE = "cookies.json"
 
-BRIDGE_HTML = """<!DOCTYPE html>
+BRIDGE_HTML_TEMPLATE = """<!DOCTYPE html>
 <html>
 <head>
 <meta charset="UTF-8">
@@ -40,7 +40,7 @@ h2{color:#e94560;font-size:24px;margin-bottom:8px;}
   <div class="box" id="box"></div>
 </div>
 <script>
-const API = 'http://" + "{SERVER_IP}" + ":" + str(PORT) + "';
+const API = 'http://__SERVER_IP__:__PORT__';
 
 function show(cls, html) {
   const b = document.getElementById('box');
@@ -59,7 +59,6 @@ async function bridge() {
     return;
   }
 
-  // Tunggu CF challenge selesai (max 40 detik)
   show('wait', '&#9203; <b>Step 2/3:</b> Menunggu Cloudflare...<br><small>Jangan tutup popup!</small>');
   let title = '';
   for (let i = 1; i <= 40; i++) {
@@ -67,7 +66,7 @@ async function bridge() {
     try {
       title = pw.document.title || '';
       if (title && !/(just a moment|tunggu|checking|sebentar)/i.test(title)) {
-        show('wait', `&#9203; <b>Step 2/3:</b> CF selesai! (${i}s)<br><small>Title: ${title}</small>`);
+        show('wait', `&#9203; <b>Step 2/3:</b> CF selesai! (${i}s)<br><small>${title}</small>`);
         break;
       }
       show('wait', `&#9203; <b>Step 2/3:</b> Menunggu CF... (${i}s)<br><small>${title || 'loading...'}</small>`);
@@ -76,16 +75,14 @@ async function bridge() {
     }
   }
 
-  // Kirim signal ke server
   show('wait', '&#9203; <b>Step 3/3:</b> Mengirim signal ke server...');
-  await sleep(1000);
+  await sleep(500);
 
-  const ua = navigator.userAgent;
   try {
     const r = await fetch(API + '/trigger', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ua: ua, title: title})
+      body: JSON.stringify({ua: navigator.userAgent, title: title})
     });
     const d = await r.json();
     if (d.ok) {
@@ -96,7 +93,7 @@ async function bridge() {
       document.getElementById('btn').disabled = false;
     }
   } catch(e) {
-    show('err', '&#10060; <b>Tidak bisa connect:</b> ' + e.message + '<br><small>Pastikan cookie_bridge.py masih jalan di server.</small>');
+    show('err', '&#10060; <b>Tidak bisa connect:</b> ' + e.message + '<br><small>Pastikan cookie_bridge.py masih jalan.</small>');
     document.getElementById('btn').disabled = false;
   }
 }
@@ -108,29 +105,29 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 
 class Handler(BaseHTTPRequestHandler):
+    server_ip = "localhost"
+
     def log_message(self, fmt, *args):
         print(f"[HTTP] {fmt % args}")
 
     def _cors(self):
-        """Tambah CORS headers agar fetch dari domain manapun bisa"""
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
 
     def do_OPTIONS(self):
-        """Handle preflight CORS request"""
         self.send_response(200)
         self._cors()
         self.end_headers()
 
     def do_GET(self):
-        if self.path == "/" or self.path == "/bridge":
-            self._html(BRIDGE_HTML)
+        if self.path in ("/", "/bridge"):
+            html = BRIDGE_HTML_TEMPLATE.replace("__SERVER_IP__", Handler.server_ip).replace("__PORT__", str(PORT))
+            self._html(html)
         elif self.path == "/ping":
             self._json({"ok": True, "msg": "pong"})
         elif self.path == "/status":
-            running = os.path.exists(".bot_running")
-            self._json({"running": running})
+            self._json({"running": os.path.exists(".bot_running")})
         else:
             self._json({"ok": False, "msg": "not found"}, 404)
 
@@ -143,13 +140,12 @@ class Handler(BaseHTTPRequestHandler):
             data = {}
 
         if self.path == "/trigger":
-            ua = data.get("ua", "")
+            ua    = data.get("ua", "")
             title = data.get("title", "")
             print(f"[*] Trigger dari HP")
-            print(f"    UA  : {ua[:80]}")
-            print(f"    Title mgkomik: {title}")
+            print(f"    UA    : {ua[:80]}")
+            print(f"    Title : {title}")
 
-            # Simpan UA ke cookies.json
             cookies = {}
             if os.path.exists(COOKIE_FILE):
                 try:
@@ -224,22 +220,19 @@ def get_ip():
     try:
         return urllib.request.urlopen("https://api.ipify.org", timeout=5).read().decode()
     except:
-        return "IP_SERVER"
+        return "localhost"
 
 
 if __name__ == "__main__":
     ip = get_ip()
-
-    # Inject IP ke HTML
-    global BRIDGE_HTML
-    BRIDGE_HTML = BRIDGE_HTML.replace("{SERVER_IP}", ip)
+    Handler.server_ip = ip
 
     print("=" * 50)
     print("  MGKomik Cookie Bridge v3")
     print("=" * 50)
     print(f"\n  \U0001f4f1 BUKA DI CHROME HP:")
     print(f"\n     http://{ip}:{PORT}")
-    print(f"\n  \U0001f9ea Test ping: http://{ip}:{PORT}/ping")
+    print(f"\n  \U0001f9ea Ping test: http://{ip}:{PORT}/ping")
     print("=" * 50)
     print()
     server = HTTPServer(("0.0.0.0", PORT), Handler)
