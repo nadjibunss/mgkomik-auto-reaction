@@ -1,4 +1,5 @@
 import cloudscraper
+import requests
 from bs4 import BeautifulSoup
 import time
 import random
@@ -37,18 +38,24 @@ def log(msg):
         f.write(msg + "\n")
 
 # =============================================
-# SESSION dengan cloudscraper (bypass Cloudflare)
+# SESSION - pakai cloudscraper + inject cf_clearance
 # =============================================
 scraper = cloudscraper.create_scraper(
-    browser={
-        "browser": "chrome",
-        "platform": "android",
-        "mobile": True,
-    }
+    browser={"browser": "chrome", "platform": "android", "mobile": True}
 )
 scraper.headers.update({
     "Accept-Language": "id-ID,id;q=0.9,en-US;q=0.8",
 })
+
+# Load cookies dari file jika ada
+COOKIE_FILE = "cookies.json"
+if os.path.exists(COOKIE_FILE):
+    with open(COOKIE_FILE) as f:
+        saved = json.load(f)
+    cf = saved.get("cf_clearance","")
+    if cf:
+        scraper.cookies.set("cf_clearance", cf, domain=".mgkomik.cc")
+        log(f"[*] Loaded cf_clearance dari {COOKIE_FILE}")
 
 # =============================================
 # LOGIN
@@ -101,19 +108,14 @@ def get_komik_list(page=1):
             log(f"    [{r.status_code}] {url}")
             if r.status_code != 200:
                 continue
-
             soup = BeautifulSoup(r.text, "html.parser")
             title = soup.title.text if soup.title else "N/A"
-
-            # Cloudflare masih blocking?
-            if "just a moment" in title.lower() or "checking" in title.lower():
-                log(f"    [!] Cloudflare challenge: {title}")
+            if "just a moment" in title.lower():
+                log(f"    [!] Masih kena Cloudflare. Perlu cf_clearance baru.")
+                log(f"    Jalankan: python3 get_cookies.py")
                 continue
-
             log(f"    Title: {title}")
             links = []
-
-            # Coba semua selector populer manga site
             for sel in [".bsx a",".bs a","div.bsx > a",".listupd .bsx a",
                         ".seriestulist a","article a[href]",".utao .uta a",
                         "h3 a[href]","h2 a[href]",".tt a"]:
@@ -125,8 +127,6 @@ def get_komik_list(page=1):
                             links.append(full)
                 if links:
                     break
-
-            # Fallback: semua a[href] yang punya /komik/slug
             if not links:
                 for a in soup.select("a[href]"):
                     href = a.get("href","")
@@ -134,13 +134,11 @@ def get_komik_list(page=1):
                         full = href if href.startswith("http") else BASE_URL + href
                         if full.rstrip("/") != LIST_URL.rstrip("/") and full not in links:
                             links.append(full)
-
             links = list(set(links))
             if links:
                 log(f"    [✓] {len(links)} komik ditemukan")
                 return links
-            else:
-                log(f"    [~] 0 komik. HTML sample: {str(soup.body)[:300] if soup.body else r.text[:300]}")
+            log(f"    [~] 0 komik. Sample: {str(soup.body)[:200] if soup.body else r.text[:200]}")
         except Exception as e:
             log(f"    [!] Error {url}: {e}")
     return []
@@ -179,7 +177,6 @@ def send_reaction(target_url, reaction_type):
     try:
         r = scraper.get(target_url, timeout=30)
         soup = BeautifulSoup(r.text, "html.parser")
-
         post_id = None
         for attr in ["data-post-id","data-id","data-comic-id","data-chapter-id","data-manga-id"]:
             el = soup.find(attrs={attr: True})
@@ -201,7 +198,6 @@ def send_reaction(target_url, reaction_type):
                     post_id = m.group(1)
         if not post_id:
             post_id = target_url.rstrip("/").split("/")[-1]
-
         payload = {"post_id": post_id, "reaction": reaction_id}
         req_h = {
             "Content-Type": "application/json",
@@ -222,7 +218,7 @@ def send_reaction(target_url, reaction_type):
                     return True
             except:
                 continue
-        log(f"    [✗] Semua API gagal: {target_url.split('/')[-1]}")
+        log(f"    [✗] API gagal: {target_url.split('/')[-1]}")
         return False
     except Exception as e:
         log(f"    [!] {e}")
@@ -256,11 +252,9 @@ def main():
     log(f"  User      : {USERNAME}")
     log(f"  Reactions : {REACTION_TYPES}")
     log("="*50)
-
     if not login():
         log("[✗] Gagal login. Stop.")
         return
-
     total = 0
     for page in range(1, MAX_PAGES + 1):
         log(f"\n{'='*40}")
@@ -278,7 +272,6 @@ def main():
             except Exception as e:
                 log(f"    [!] Skip: {e}")
             time.sleep(DELAY_KOMIK)
-
     log("\n" + "="*50)
     log(f"  SELESAI! Total komik: {total}")
     log("="*50)
