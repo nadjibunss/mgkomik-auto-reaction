@@ -7,16 +7,16 @@ import re
 import os
 
 # =============================================
-# KONFIGURASI (bisa diset lewat ENV variable)
+# KONFIGURASI - EDIT DI SINI
 # =============================================
-USERNAME       = os.environ.get("USERNAME", "Nasky")
-PASSWORD       = os.environ.get("PASSWORD", "sukasari05")
-REACTION_STR   = os.environ.get("REACTION_TYPES", "upvote,funny,love")
-REACTION_TYPES = [r.strip() for r in REACTION_STR.split(",")]
-MAX_PAGES      = int(os.environ.get("MAX_PAGES", 2))
-MAX_CHAPTERS_PER_KOMIK = int(os.environ.get("MAX_CHAPTERS_PER_KOMIK", 5))
-DELAY_MIN      = float(os.environ.get("DELAY_MIN", 3))
-DELAY_MAX      = float(os.environ.get("DELAY_MAX", 7))
+USERNAME       = "Nasky"
+PASSWORD       = "sukasari05"  # GANTI PASSWORD!
+REACTION_TYPES = ["upvote", "funny", "love"]  # pilihan: upvote funny love surprised angry sad
+MAX_PAGES      = 2       # jumlah halaman komik yang discan
+MAX_CHAPTERS_PER_KOMIK = 5  # berapa chapter per komik
+DELAY_MIN      = 3       # detik minimum antar request
+DELAY_MAX      = 7       # detik maksimum antar request
+LOOP_INTERVAL  = 1800    # ulang tiap 30 menit (detik)
 
 LOGIN_URL = "https://komentar.mgkomik.cc/masuk"
 BASE_URL  = "https://web.mgkomik.cc"
@@ -28,7 +28,7 @@ os.makedirs("logs", exist_ok=True)
 
 def log(msg):
     print(msg, flush=True)
-    with open("logs/bot.log", "a") as f:
+    with open("logs/bot.log", "a", encoding="utf-8") as f:
         f.write(msg + "\n")
 
 # =============================================
@@ -73,7 +73,7 @@ def login():
                 log("[✓] Login BERHASIL!")
                 return True
             else:
-                log("[!] Login mungkin berhasil (lanjut...)")
+                log("[!] Login dicoba, lanjut...")
                 return True
         else:
             log(f"[✗] Login gagal! HTTP {r2.status_code}")
@@ -86,7 +86,7 @@ def login():
 # AMBIL DAFTAR KOMIK
 # =============================================
 def get_komik_list(page=1):
-    log(f"[*] Ambil daftar komik halaman {page}...")
+    log(f"[*] Ambil komik halaman {page}...")
     url = f"{BASE_URL}/komik?page={page}"
     try:
         r = session.get(url, timeout=15)
@@ -177,7 +177,7 @@ def send_reaction(target_url, reaction_type="upvote"):
                 log(f"    [✓] {reaction_type.upper()} → {target_url.split('/')[-1]}")
                 return True
 
-        log(f"    [✗] Gagal reaction: {rr.status_code}")
+        log(f"    [✗] Gagal {rr.status_code}: {rr.text[:80]}")
         return False
 
     except Exception as e:
@@ -189,15 +189,15 @@ def send_reaction(target_url, reaction_type="upvote"):
 # =============================================
 def main():
     log("=" * 50)
-    log("  MGKomik Auto Reaction Bot (Docker)")
+    log("  MGKomik Auto Reaction Bot")
     log("=" * 50)
-    log(f"  User      : {USERNAME}")
-    log(f"  Reactions : {REACTION_TYPES}")
-    log(f"  Max Pages : {MAX_PAGES}")
-    log(f"  Max Ch/Komik: {MAX_CHAPTERS_PER_KOMIK}")
+    log(f"  User       : {USERNAME}")
+    log(f"  Reactions  : {REACTION_TYPES}")
+    log(f"  Max Pages  : {MAX_PAGES}")
+    log(f"  Max Chapter: {MAX_CHAPTERS_PER_KOMIK}")
     log("=" * 50)
 
-    while True:  # loop terus agar container tidak mati
+    while True:
         if not login():
             log("[✗] Gagal login, coba lagi 60 detik...")
             time.sleep(60)
@@ -209,7 +209,6 @@ def main():
         for page in range(1, MAX_PAGES + 1):
             komik_list = get_komik_list(page)
             if not komik_list:
-                log(f"[!] Tidak ada komik di halaman {page}.")
                 break
 
             for komik_url in komik_list:
@@ -231,8 +230,8 @@ def main():
                     time.sleep(random.uniform(DELAY_MIN, DELAY_MAX))
 
         log(f"\n[✓] Ronde selesai! OK: {total_ok} | Gagal: {total_fail}")
-        log("[*] Tunggu 30 menit lalu ulang...\n")
-        time.sleep(1800)  # ulang tiap 30 menit
+        log(f"[*] Tunggu {LOOP_INTERVAL//60} menit lalu ulang...\n")
+        time.sleep(LOOP_INTERVAL)
 
 if __name__ == "__main__":
     main()
