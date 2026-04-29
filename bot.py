@@ -4,28 +4,32 @@ import time
 import random
 import json
 import re
+import os
 
 # =============================================
-# KONFIGURASI
+# KONFIGURASI (bisa diset lewat ENV variable)
 # =============================================
-USERNAME = "Nasky"
-PASSWORD = "sukasari05"  # SEGERA GANTI PASSWORD!
+USERNAME       = os.environ.get("USERNAME", "Nasky")
+PASSWORD       = os.environ.get("PASSWORD", "sukasari05")
+REACTION_STR   = os.environ.get("REACTION_TYPES", "upvote,funny,love")
+REACTION_TYPES = [r.strip() for r in REACTION_STR.split(",")]
+MAX_PAGES      = int(os.environ.get("MAX_PAGES", 2))
+MAX_CHAPTERS_PER_KOMIK = int(os.environ.get("MAX_CHAPTERS_PER_KOMIK", 5))
+DELAY_MIN      = float(os.environ.get("DELAY_MIN", 3))
+DELAY_MAX      = float(os.environ.get("DELAY_MAX", 7))
 
 LOGIN_URL = "https://komentar.mgkomik.cc/masuk"
 BASE_URL  = "https://web.mgkomik.cc"
 
-# Reaction yang akan dipilih secara acak
-# Pilihan: upvote, funny, love, surprised, angry, sad
-REACTION_TYPES = ["upvote", "funny", "love"]
+# =============================================
+# LOGGING
+# =============================================
+os.makedirs("logs", exist_ok=True)
 
-DELAY_MIN = 3
-DELAY_MAX = 7
-
-# Berapa banyak halaman komik yang mau di-scan (1 halaman ~20 komik)
-MAX_PAGES = 2
-
-# Berapa chapter per komik yang direact
-MAX_CHAPTERS_PER_KOMIK = 5
+def log(msg):
+    print(msg, flush=True)
+    with open("logs/bot.log", "a") as f:
+        f.write(msg + "\n")
 
 # =============================================
 # SESSION
@@ -42,7 +46,7 @@ session.headers.update({
 # LOGIN
 # =============================================
 def login():
-    print("[*] Mencoba login ke MGKomik...")
+    log("[*] Mencoba login ke MGKomik...")
     try:
         r = session.get(LOGIN_URL, timeout=15)
         soup = BeautifulSoup(r.text, "html.parser")
@@ -52,10 +56,7 @@ def login():
         if t:
             csrf = t.get("value")
 
-        payload = {
-            "username": USERNAME,
-            "password": PASSWORD,
-        }
+        payload = {"username": USERNAME, "password": PASSWORD}
         if csrf:
             payload["_token"] = csrf
 
@@ -67,26 +68,25 @@ def login():
 
         r2 = session.post(LOGIN_URL, data=payload, headers=headers, allow_redirects=True, timeout=15)
 
-        # Cek apakah login berhasil
         if r2.status_code == 200:
             if any(k in r2.text.lower() for k in ["logout", "keluar", USERNAME.lower(), "dashboard", "profil"]):
-                print("[✓] Login BERHASIL!")
+                log("[✓] Login BERHASIL!")
                 return True
             else:
-                print("[!] Login mungkin gagal - tidak ditemukan tanda login. Lanjut coba...")
-                return True  # tetap lanjut, mungkin session sudah tersimpan
+                log("[!] Login mungkin berhasil (lanjut...)")
+                return True
         else:
-            print(f"[✗] Login gagal! HTTP {r2.status_code}")
+            log(f"[✗] Login gagal! HTTP {r2.status_code}")
             return False
     except Exception as e:
-        print(f"[✗] Error saat login: {e}")
+        log(f"[✗] Error login: {e}")
         return False
 
 # =============================================
 # AMBIL DAFTAR KOMIK
 # =============================================
 def get_komik_list(page=1):
-    print(f"[*] Mengambil daftar komik halaman {page}...")
+    log(f"[*] Ambil daftar komik halaman {page}...")
     url = f"{BASE_URL}/komik?page={page}"
     try:
         r = session.get(url, timeout=15)
@@ -94,14 +94,15 @@ def get_komik_list(page=1):
         links = []
         for a in soup.select("a[href]"):
             href = a.get("href", "")
-            if "/komik/" in href and "/chapter" not in href and href not in links:
+            if "/komik/" in href and "/chapter" not in href:
                 full = href if href.startswith("http") else BASE_URL + href
-                links.append(full)
+                if full not in links:
+                    links.append(full)
         links = list(set(links))
-        print(f"    Ditemukan {len(links)} komik.")
+        log(f"    {len(links)} komik ditemukan.")
         return links
     except Exception as e:
-        print(f"[!] Error ambil komik list: {e}")
+        log(f"[!] Error komik list: {e}")
         return []
 
 # =============================================
@@ -114,12 +115,13 @@ def get_chapter_list(komik_url):
         chapters = []
         for a in soup.select("a[href]"):
             href = a.get("href", "")
-            if "/chapter" in href and href not in chapters:
+            if "/chapter" in href:
                 full = href if href.startswith("http") else BASE_URL + href
-                chapters.append(full)
+                if full not in chapters:
+                    chapters.append(full)
         return list(set(chapters))[:MAX_CHAPTERS_PER_KOMIK]
     except Exception as e:
-        print(f"[!] Error ambil chapter: {e}")
+        log(f"[!] Error chapter list: {e}")
         return []
 
 # =============================================
@@ -127,12 +129,8 @@ def get_chapter_list(komik_url):
 # =============================================
 def send_reaction(target_url, reaction_type="upvote"):
     reaction_map = {
-        "upvote":    1,
-        "funny":     2,
-        "love":      3,
-        "surprised": 4,
-        "angry":     5,
-        "sad":       6,
+        "upvote": 1, "funny": 2, "love": 3,
+        "surprised": 4, "angry": 5, "sad": 6,
     }
     reaction_id = reaction_map.get(reaction_type, 1)
 
@@ -140,7 +138,6 @@ def send_reaction(target_url, reaction_type="upvote"):
         r = session.get(target_url, timeout=15)
         soup = BeautifulSoup(r.text, "html.parser")
 
-        # Coba ambil post_id dari berbagai atribut HTML
         post_id = None
         for attr in ["data-post-id", "data-id", "data-comic-id", "data-chapter-id"]:
             el = soup.find(attrs={attr: True})
@@ -148,13 +145,11 @@ def send_reaction(target_url, reaction_type="upvote"):
                 post_id = el.get(attr)
                 break
 
-        # Fallback: ambil dari URL
         if not post_id:
             m = re.search(r'/(\d+)', target_url)
             if m:
                 post_id = m.group(1)
 
-        # Coba ambil dari script JSON LD atau meta
         if not post_id:
             for script in soup.find_all("script", {"type": "application/json"}):
                 try:
@@ -166,11 +161,9 @@ def send_reaction(target_url, reaction_type="upvote"):
                     pass
 
         if not post_id:
-            print(f"    [!] post_id tidak ditemukan untuk: {target_url}")
+            log(f"    [!] post_id tidak ditemukan: {target_url}")
             return False
 
-        # Kirim ke API reaction
-        api_url = f"{BASE_URL}/api/reaction"
         payload = {"post_id": post_id, "reaction": reaction_id}
         headers = {
             "Content-Type": "application/json",
@@ -178,73 +171,68 @@ def send_reaction(target_url, reaction_type="upvote"):
             "Referer": target_url,
         }
 
-        rr = session.post(api_url, json=payload, headers=headers, timeout=15)
-
-        if rr.status_code == 200:
-            print(f"    [✓] {reaction_type.upper()} → {target_url.split('/')[-1]}")
-            return True
-        else:
-            # Coba endpoint alternatif
-            api_url2 = f"{BASE_URL}/reaction"
-            rr2 = session.post(api_url2, json=payload, headers=headers, timeout=15)
-            if rr2.status_code == 200:
-                print(f"    [✓] {reaction_type.upper()} (alt) → {target_url.split('/')[-1]}")
+        for api in [f"{BASE_URL}/api/reaction", f"{BASE_URL}/reaction"]:
+            rr = session.post(api, json=payload, headers=headers, timeout=15)
+            if rr.status_code == 200:
+                log(f"    [✓] {reaction_type.upper()} → {target_url.split('/')[-1]}")
                 return True
-            print(f"    [✗] Gagal reaction {rr.status_code}: {rr.text[:80]}")
-            return False
+
+        log(f"    [✗] Gagal reaction: {rr.status_code}")
+        return False
 
     except Exception as e:
-        print(f"    [!] Exception reaction: {e}")
+        log(f"    [!] Exception: {e}")
         return False
 
 # =============================================
-# MAIN
+# MAIN LOOP
 # =============================================
 def main():
-    print("="*50)
-    print("  MGKomik Auto Reaction Bot")
-    print("="*50)
+    log("=" * 50)
+    log("  MGKomik Auto Reaction Bot (Docker)")
+    log("=" * 50)
+    log(f"  User      : {USERNAME}")
+    log(f"  Reactions : {REACTION_TYPES}")
+    log(f"  Max Pages : {MAX_PAGES}")
+    log(f"  Max Ch/Komik: {MAX_CHAPTERS_PER_KOMIK}")
+    log("=" * 50)
 
-    if not login():
-        print("[✗] Bot berhenti karena gagal login.")
-        return
+    while True:  # loop terus agar container tidak mati
+        if not login():
+            log("[✗] Gagal login, coba lagi 60 detik...")
+            time.sleep(60)
+            continue
 
-    total_ok = 0
-    total_fail = 0
+        total_ok = 0
+        total_fail = 0
 
-    for page in range(1, MAX_PAGES + 1):
-        komik_list = get_komik_list(page)
-        if not komik_list:
-            print(f"[!] Tidak ada komik di halaman {page}, stop.")
-            break
+        for page in range(1, MAX_PAGES + 1):
+            komik_list = get_komik_list(page)
+            if not komik_list:
+                log(f"[!] Tidak ada komik di halaman {page}.")
+                break
 
-        for komik_url in komik_list:
-            print(f"\n[→] {komik_url}")
+            for komik_url in komik_list:
+                log(f"\n[→] {komik_url}")
 
-            # Reaction di halaman komik
-            reaction = random.choice(REACTION_TYPES)
-            ok = send_reaction(komik_url, reaction)
-            if ok:
-                total_ok += 1
-            else:
-                total_fail += 1
-            time.sleep(random.uniform(DELAY_MIN, DELAY_MAX))
-
-            # Reaction di tiap chapter
-            chapters = get_chapter_list(komik_url)
-            print(f"    {len(chapters)} chapter ditemukan")
-            for ch_url in chapters:
                 reaction = random.choice(REACTION_TYPES)
-                ok = send_reaction(ch_url, reaction)
-                if ok:
-                    total_ok += 1
-                else:
-                    total_fail += 1
+                ok = send_reaction(komik_url, reaction)
+                total_ok += 1 if ok else 0
+                total_fail += 0 if ok else 1
                 time.sleep(random.uniform(DELAY_MIN, DELAY_MAX))
 
-    print("\n" + "="*50)
-    print(f"  SELESAI! Berhasil: {total_ok} | Gagal: {total_fail}")
-    print("="*50)
+                chapters = get_chapter_list(komik_url)
+                log(f"    {len(chapters)} chapter")
+                for ch_url in chapters:
+                    reaction = random.choice(REACTION_TYPES)
+                    ok = send_reaction(ch_url, reaction)
+                    total_ok += 1 if ok else 0
+                    total_fail += 0 if ok else 1
+                    time.sleep(random.uniform(DELAY_MIN, DELAY_MAX))
+
+        log(f"\n[✓] Ronde selesai! OK: {total_ok} | Gagal: {total_fail}")
+        log("[*] Tunggu 30 menit lalu ulang...\n")
+        time.sleep(1800)  # ulang tiap 30 menit
 
 if __name__ == "__main__":
     main()

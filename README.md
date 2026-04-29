@@ -1,49 +1,68 @@
-# MGKomik Auto Reaction Bot
+# MGKomik Auto Reaction Bot 🤖
 
-Bot otomatis untuk memberi reaction di setiap komik dan chapter di [web.mgkomik.cc](https://web.mgkomik.cc).
+Bot otomatis reaction di [web.mgkomik.cc](https://web.mgkomik.cc) — support **Docker** dan **Termux**.
 
-## Fitur
-- Login otomatis ke MGKomik
-- Scan semua komik dari halaman daftar
-- Reaction otomatis di halaman komik dan setiap chapter
-- Pilihan reaction: Upvote, Funny, Love, Surprised, Angry, Sad
-- Delay acak antar request untuk menghindari ban
+## 🐳 Deploy dengan Docker
 
-## Cara Pakai di Termux
+### Cara 1 — Docker Compose (Direkomendasikan)
+```bash
+# Clone repo
+git clone https://github.com/nadjibunss/mgkomik-auto-reaction
+cd mgkomik-auto-reaction
 
-### 1. Install git dan clone repo
+# Edit password dulu!
+nano docker-compose.yml
+
+# Jalankan
+docker-compose up -d
+
+# Lihat log live
+docker-compose logs -f
+```
+
+### Cara 2 — Docker biasa
+```bash
+docker build -t mgkomik-bot .
+docker run -d --name mgkomik-bot \
+  -e USERNAME=Nasky \
+  -e PASSWORD=PASSWORD_KAMU \
+  -e REACTION_TYPES=upvote,funny,love \
+  -e MAX_PAGES=2 \
+  -e MAX_CHAPTERS_PER_KOMIK=5 \
+  --restart unless-stopped \
+  mgkomik-bot
+
+# Lihat log
+docker logs -f mgkomik-bot
+```
+
+## 📱 Jalankan di Termux
 ```bash
 pkg update && pkg install git python -y
 git clone https://github.com/nadjibunss/mgkomik-auto-reaction
 cd mgkomik-auto-reaction
-```
-
-### 2. Install dependencies
-```bash
 pip install -r requirements.txt
-```
-
-### 3. Edit konfigurasi (opsional)
-```bash
-nano bot.py
-# Ubah USERNAME, PASSWORD, REACTION_TYPES, MAX_PAGES, MAX_CHAPTERS_PER_KOMIK
-```
-
-### 4. Jalankan bot
-```bash
-bash run.sh
-# atau langsung:
 python3 bot.py
 ```
 
-## Konfigurasi di bot.py
+## ⚙️ Konfigurasi ENV
 
-| Variabel | Default | Keterangan |
+| Variable | Default | Keterangan |
 |---|---|---|
 | `USERNAME` | `Nasky` | Username MGKomik |
-| `PASSWORD` | `****` | Password MGKomik |
-| `REACTION_TYPES` | `["upvote","funny","love"]` | Jenis reaction acak |
-| `MAX_PAGES` | `2` | Halaman daftar komik |
+| `PASSWORD` | `sukasari05` | Password MGKomik |
+| `REACTION_TYPES` | `upvote,funny,love` | Reaction acak (pisah koma) |
+| `MAX_PAGES` | `2` | Jumlah halaman komik |
 | `MAX_CHAPTERS_PER_KOMIK` | `5` | Chapter per komik |
-| `DELAY_MIN` | `3` | Delay minimum (detik) |
-| `DELAY_MAX` | `7` | Delay maksimum (detik) |
+| `DELAY_MIN` | `3` | Delay min antar request (detik) |
+| `DELAY_MAX` | `7` | Delay max antar request (detik) |
+
+## 📋 Fitur
+- ✅ Login otomatis
+- ✅ Scan semua komik
+- ✅ Reaction di halaman komik & setiap chapter
+- ✅ Reaction acak: Upvote, Funny, Love, Surprised, Angry, Sad
+- ✅ Loop otomatis tiap 30 menit
+- ✅ Simpan log ke `logs/bot.log`
+- ✅ Konfigurasi via ENV variable (Docker-friendly)
+- ✅ Auto-restart jika container crash

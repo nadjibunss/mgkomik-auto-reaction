@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  mgkomik-bot:
+    build: .
+    container_name: mgkomik-auto-reaction
+    restart: unless-stopped
+    environment:
+      - USERNAME=Nasky
+      - PASSWORD=sukasari05
+      - REACTION_TYPES=upvote,funny,love
+      - MAX_PAGES=2
+      - MAX_CHAPTERS_PER_KOMIK=5
+      - DELAY_MIN=3
+      - DELAY_MAX=7
+    volumes:
+      - ./logs:/app/logs
