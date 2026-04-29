@@ -2,26 +2,31 @@ import requests
 from bs4 import BeautifulSoup
 import time
 import random
-import json
 import re
 import os
 
 # =============================================
-# KONFIGURASI - EDIT DI SINI
+# KONFIGURASI
 # =============================================
-USERNAME       = "Nasky"
-PASSWORD       = "sukasari05"  # GANTI PASSWORD!
-REACTION_TYPES = ["upvote", "funny", "love"]  # pilihan: upvote funny love surprised angry sad
-MAX_PAGES      = 2
-MAX_CHAPTERS_PER_KOMIK = 5
-DELAY_MIN      = 3
-DELAY_MAX      = 7
-LOOP_INTERVAL  = 1800  # ulang tiap 30 menit
+USERNAME    = "Nasky"
+PASSWORD    = "sukasari05"  # GANTI PASSWORD!
 
-# URL - LOGIN dulu ke komentar, lalu reaction di web
-LOGIN_URL  = "https://komentar.mgkomik.cc/login.php"
-BASE_URL   = "https://web.mgkomik.cc"
-KOMENTAR   = "https://komentar.mgkomik.cc"
+# Reaction yang dipilih acak tiap kali
+# Pilihan: upvote, funny, love, surprised, angry, sad
+REACTION_TYPES = ["upvote", "funny", "love"]
+
+DELAY_BETWEEN_REACTION = 2   # detik antar reaction (jangan terlalu cepat)
+DELAY_BETWEEN_KOMIK    = 3   # detik antar komik
+DELAY_BETWEEN_PAGE     = 2   # detik antar halaman listing
+
+START_PAGE  = 1   # mulai dari halaman berapa
+MAX_PAGES   = 999 # scan semua halaman (stop otomatis kalau sudah habis)
+MAX_CHAPTER = 999 # semua chapter per komik
+
+LOGIN_URL   = "https://komentar.mgkomik.cc/login.php"
+KOMENTAR    = "https://komentar.mgkomik.cc"
+BASE_URL    = "https://web.mgkomik.cc"
+LIST_URL    = "https://web.mgkomik.cc/komik/"
 
 # =============================================
 # LOGGING
@@ -34,142 +39,94 @@ def log(msg):
         f.write(msg + "\n")
 
 # =============================================
-# SESSION (shared untuk komentar + web)
+# SESSION
 # =============================================
 session = requests.Session()
 session.headers.update({
-    "User-Agent": "Mozilla/5.0 (Linux; Android 11) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "User-Agent": "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
     "Accept-Language": "id-ID,id;q=0.9,en-US;q=0.8",
+    "Connection": "keep-alive",
 })
 
 # =============================================
-# LOGIN ke komentar.mgkomik.cc/login.php
+# LOGIN
 # =============================================
 def login():
-    log("[*] Login ke https://komentar.mgkomik.cc/login.php ...")
+    log("\n" + "="*50)
+    log(f"[*] Login ke {LOGIN_URL}")
     try:
-        # GET halaman login untuk ambil CSRF / form fields
-        r = session.get(LOGIN_URL, timeout=15)
+        r = session.get(LOGIN_URL, timeout=20)
         soup = BeautifulSoup(r.text, "html.parser")
 
-        # Cari semua hidden input
         payload = {}
         form = soup.find("form")
         if form:
             for inp in form.find_all("input"):
-                name = inp.get("name")
-                val  = inp.get("value", "")
-                if name:
-                    payload[name] = val
+                n = inp.get("name")
+                v = inp.get("value", "")
+                if n:
+                    payload[n] = v
 
-        # Isi username & password
-        # Coba berbagai kemungkinan nama field
-        for key in ["username", "user", "email", "login"]:
-            if key in payload or not payload:
-                payload[key] = USERNAME
-                break
-        for key in ["password", "pass", "passwd", "pwd"]:
-            if key in payload or not payload:
-                payload[key] = PASSWORD
-                break
-
-        # Pastikan field username & password terisi
         payload["username"] = USERNAME
         payload["password"] = PASSWORD
 
-        headers = {
+        h = {
             "Content-Type": "application/x-www-form-urlencoded",
             "Referer": LOGIN_URL,
             "Origin": KOMENTAR,
         }
+        r2 = session.post(LOGIN_URL, data=payload, headers=h, allow_redirects=True, timeout=20)
+        log(f"    Status: {r2.status_code} | Redirect: {r2.url}")
 
-        r2 = session.post(LOGIN_URL, data=payload, headers=headers, allow_redirects=True, timeout=15)
+        # Cek login berhasil
+        checks = ["logout", "keluar", "dashboard", "profil", USERNAME.lower(), "sign out", "signout"]
+        if any(c in r2.text.lower() for c in checks):
+            log("[✓] LOGIN BERHASIL!")
+            return True
 
-        # Debug: print respons awal
-        log(f"    Status: {r2.status_code} | URL: {r2.url}")
+        # Coba cek cookies
+        cookies = dict(session.cookies)
+        if any("session" in k.lower() or "token" in k.lower() or "user" in k.lower() or "auth" in k.lower() for k in cookies):
+            log(f"[✓] Login OK via cookie: {list(cookies.keys())}")
+            return True
 
-        if r2.status_code in [200, 302]:
-            if any(k in r2.text.lower() for k in ["logout", "keluar", "dashboard", "profil", USERNAME.lower()]):
-                log("[✓] Login BERHASIL!")
-                return True
-            else:
-                log("[!] Halaman login tidak menunjukkan konfirmasi, tapi lanjut...")
-                # Print 300 karakter pertama untuk debug
-                log(f"    Preview: {r2.text[:300]}")
-                return True
-        else:
-            log(f"[✗] Login gagal! HTTP {r2.status_code}")
-            return False
+        log(f"[!] Login tidak terkonfirmasi. Preview: {r2.text[:200]}")
+        return True  # tetap lanjut, mungkin sudah login
     except Exception as e:
         log(f"[✗] Error login: {e}")
         return False
 
 # =============================================
-# AMBIL DAFTAR KOMIK dari web.mgkomik.cc
+# AMBIL SEMUA KOMIK DARI HALAMAN LISTING
 # =============================================
-def get_komik_list(page=1):
-    log(f"[*] Ambil daftar komik halaman {page}...")
-
-    # Coba berbagai endpoint daftar komik
-    urls_to_try = [
-        f"{BASE_URL}/komik?page={page}",
-        f"{BASE_URL}/manga?page={page}",
-        f"{BASE_URL}/daftar-komik?page={page}",
-        f"{BASE_URL}/?page={page}",
-    ]
-
-    for url in urls_to_try:
-        try:
-            r = session.get(url, timeout=15)
-            soup = BeautifulSoup(r.text, "html.parser")
-            links = []
-
-            # Selector 1: link yang mengandung /komik/ atau /manga/
-            for a in soup.select("a[href]"):
-                href = a.get("href", "")
-                if any(pat in href for pat in ["/komik/", "/manga/", "/manhwa/", "/manhua/"]):
-                    if "/chapter" not in href and "#" not in href:
-                        full = href if href.startswith("http") else BASE_URL + href
-                        if full not in links:
-                            links.append(full)
-
-            if links:
-                links = list(set(links))
-                log(f"    {len(links)} komik ditemukan dari {url}")
-                return links
-            else:
-                log(f"    0 komik dari {url}, coba URL lain...")
-
-        except Exception as e:
-            log(f"    Error {url}: {e}")
-
-    # Fallback: ambil dari halaman utama
-    log("[*] Fallback: ambil dari halaman utama...")
+def get_komik_page(page=1):
+    url = f"{LIST_URL}?page={page}"
     try:
-        r = session.get(BASE_URL, timeout=15)
+        r = session.get(url, timeout=20)
         soup = BeautifulSoup(r.text, "html.parser")
+
         links = []
         for a in soup.select("a[href]"):
             href = a.get("href", "")
-            if len(href) > 10 and "/chapter" not in href and "#" not in href:
-                if any(pat in href for pat in ["/komik/", "/manga/", "/manhwa/", "/manhua/", "/series/"]):
-                    full = href if href.startswith("http") else BASE_URL + href
-                    if full not in links:
-                        links.append(full)
-        links = list(set(links))
-        log(f"    {len(links)} komik dari halaman utama.")
-        return links
+            # Link komik: mengandung /komik/ tapi BUKAN /chapter
+            if "/komik/" in href and "/chapter" not in href and href.rstrip("/") != LIST_URL.rstrip("/"):
+                full = href if href.startswith("http") else BASE_URL + href
+                # Pastikan bukan halaman listing itu sendiri
+                if full.rstrip("/") != LIST_URL.rstrip("/") and full not in links:
+                    links.append(full)
+
+        return list(set(links))
     except Exception as e:
-        log(f"[!] Fallback error: {e}")
+        log(f"[!] Error ambil halaman {page}: {e}")
         return []
 
 # =============================================
-# AMBIL DAFTAR CHAPTER
+# AMBIL SEMUA CHAPTER DARI HALAMAN KOMIK
 # =============================================
-def get_chapter_list(komik_url):
+def get_chapters(komik_url):
     try:
-        r = session.get(komik_url, timeout=15)
+        r = session.get(komik_url, timeout=20)
         soup = BeautifulSoup(r.text, "html.parser")
         chapters = []
         for a in soup.select("a[href]"):
@@ -178,15 +135,18 @@ def get_chapter_list(komik_url):
                 full = href if href.startswith("http") else BASE_URL + href
                 if full not in chapters:
                     chapters.append(full)
-        return list(set(chapters))[:MAX_CHAPTERS_PER_KOMIK]
+        # Urutkan chapter dari awal ke akhir
+        chapters = list(set(chapters))
+        chapters.sort()
+        return chapters[:MAX_CHAPTER]
     except Exception as e:
-        log(f"[!] Error chapter: {e}")
+        log(f"    [!] Error ambil chapter: {e}")
         return []
 
 # =============================================
-# KIRIM REACTION
+# KIRIM REACTION KE SATU URL
 # =============================================
-def send_reaction(target_url, reaction_type="upvote"):
+def send_reaction(target_url, reaction_type):
     reaction_map = {
         "upvote": 1, "funny": 2, "love": 3,
         "surprised": 4, "angry": 5, "sad": 6,
@@ -194,57 +154,67 @@ def send_reaction(target_url, reaction_type="upvote"):
     reaction_id = reaction_map.get(reaction_type, 1)
 
     try:
-        r = session.get(target_url, timeout=15)
+        r = session.get(target_url, timeout=20)
         soup = BeautifulSoup(r.text, "html.parser")
 
-        # Cari post_id dari berbagai atribut
+        # Cari post_id dari HTML
         post_id = None
-        for attr in ["data-post-id", "data-id", "data-comic-id", "data-chapter-id", "data-manga-id"]:
+
+        # Cara 1: atribut data-*
+        for attr in ["data-post-id", "data-id", "data-comic-id", "data-chapter-id", "data-manga-id", "data-entry-id"]:
             el = soup.find(attrs={attr: True})
             if el:
                 post_id = el.get(attr)
                 break
 
-        # Cari dari script tag
+        # Cara 2: dari script inline
         if not post_id:
             for script in soup.find_all("script"):
                 txt = script.string or ""
-                m = re.search(r'(?:post_id|postId|comic_id|chapter_id)["\s:=]+([\d]+)', txt)
+                m = re.search(r'(?:post_id|postId|comic_id|chapter_id|entry_id|the_id)["\s:=>]+["\']?([\d]+)', txt)
                 if m:
                     post_id = m.group(1)
                     break
 
-        # Fallback dari URL
+        # Cara 3: meta tag
         if not post_id:
-            m = re.search(r'/(\d+)(?:/|$)', target_url)
-            if m:
-                post_id = m.group(1)
+            meta = soup.find("meta", {"property": "og:url"})
+            if meta:
+                m = re.search(r'p=(\d+)', meta.get("content", ""))
+                if m:
+                    post_id = m.group(1)
 
+        # Cara 4: ambil dari URL slug → pakai sebagai ID
         if not post_id:
-            log(f"    [!] post_id tidak ditemukan: {target_url}")
-            return False
+            slug = target_url.rstrip("/").split("/")[-1]
+            post_id = slug
 
         payload = {"post_id": post_id, "reaction": reaction_id}
-        headers = {
+        req_headers = {
             "Content-Type": "application/json",
             "X-Requested-With": "XMLHttpRequest",
             "Referer": target_url,
             "Origin": BASE_URL,
         }
 
-        # Coba beberapa endpoint API reaction
-        for api in [
+        endpoints = [
             f"{BASE_URL}/api/reaction",
+            f"{BASE_URL}/wp-json/manga/v1/reaction",
             f"{BASE_URL}/reaction",
-            f"{BASE_URL}/wp-admin/admin-ajax.php",
             f"{KOMENTAR}/api/reaction",
-        ]:
-            rr = session.post(api, json=payload, headers=headers, timeout=15)
-            if rr.status_code == 200:
-                log(f"    [✓] {reaction_type.upper()} → {target_url.split('/')[-1]}")
-                return True
+        ]
 
-        log(f"    [✗] Semua endpoint gagal. Last: {rr.status_code}")
+        for api in endpoints:
+            try:
+                rr = session.post(api, json=payload, headers=req_headers, timeout=10)
+                if rr.status_code == 200:
+                    resp = rr.text[:80]
+                    log(f"    [✓] {reaction_type.upper()} | pid={post_id} | {resp}")
+                    return True
+            except:
+                continue
+
+        log(f"    [✗] Semua endpoint gagal untuk: {target_url.split('/')[-1]}")
         return False
 
     except Exception as e:
@@ -252,56 +222,79 @@ def send_reaction(target_url, reaction_type="upvote"):
         return False
 
 # =============================================
-# MAIN LOOP
+# PROSES SATU KOMIK LENGKAP
+# =============================================
+def process_komik(komik_url, nomor):
+    name = komik_url.rstrip("/").split("/")[-1]
+    log(f"\n[{nomor}] ▶ KOMIK: {name}")
+    log(f"    URL: {komik_url}")
+
+    # Reaction di halaman utama komik
+    r1 = random.choice(REACTION_TYPES)
+    log(f"    Reaction komik: {r1}")
+    send_reaction(komik_url, r1)
+    time.sleep(DELAY_BETWEEN_REACTION)
+
+    # Ambil semua chapter
+    chapters = get_chapters(komik_url)
+    log(f"    Chapter ditemukan: {len(chapters)}")
+
+    for i, ch_url in enumerate(chapters, 1):
+        ch_name = ch_url.rstrip("/").split("/")[-1]
+        r2 = random.choice(REACTION_TYPES)
+        log(f"    [{i}/{len(chapters)}] Chapter: {ch_name} → {r2}")
+        send_reaction(ch_url, r2)
+        time.sleep(DELAY_BETWEEN_REACTION)
+
+    log(f"    ✓ Komik selesai: {name}")
+
+# =============================================
+# MAIN
 # =============================================
 def main():
-    log("=" * 50)
+    log("="*50)
     log("  MGKomik Auto Reaction Bot")
-    log("=" * 50)
-    log(f"  User       : {USERNAME}")
-    log(f"  Login URL  : {LOGIN_URL}")
-    log(f"  Reaction di: {BASE_URL}")
-    log(f"  Reactions  : {REACTION_TYPES}")
-    log(f"  Max Pages  : {MAX_PAGES}")
-    log(f"  Max Chapter: {MAX_CHAPTERS_PER_KOMIK}")
-    log("=" * 50)
+    log(f"  User      : {USERNAME}")
+    log(f"  Reactions : {REACTION_TYPES}")
+    log(f"  List URL  : {LIST_URL}")
+    log("="*50)
 
-    while True:
-        if not login():
-            log("[✗] Gagal login, coba lagi 60 detik...")
-            time.sleep(60)
-            continue
+    if not login():
+        log("[✗] Gagal login. Bot berhenti.")
+        return
 
-        total_ok = 0
-        total_fail = 0
+    total_komik = 0
+    total_ok    = 0
+    total_fail  = 0
 
-        for page in range(1, MAX_PAGES + 1):
-            komik_list = get_komik_list(page)
-            if not komik_list:
-                log(f"[!] Tidak ada komik di halaman {page}.")
-                break
+    for page in range(START_PAGE, MAX_PAGES + 1):
+        log(f"\n{'='*50}")
+        log(f"[PAGE {page}] Mengambil daftar komik...")
+        komik_list = get_komik_page(page)
 
-            for komik_url in komik_list:
-                log(f"\n[→] {komik_url}")
+        if not komik_list:
+            log(f"[!] Halaman {page} kosong atau habis. Bot selesai.")
+            break
 
-                reaction = random.choice(REACTION_TYPES)
-                ok = send_reaction(komik_url, reaction)
-                total_ok += 1 if ok else 0
-                total_fail += 0 if ok else 1
-                time.sleep(random.uniform(DELAY_MIN, DELAY_MAX))
+        log(f"    {len(komik_list)} komik di halaman ini.")
+        time.sleep(DELAY_BETWEEN_PAGE)
 
-                chapters = get_chapter_list(komik_url)
-                log(f"    {len(chapters)} chapter")
-                for ch_url in chapters:
-                    reaction = random.choice(REACTION_TYPES)
-                    ok = send_reaction(ch_url, reaction)
-                    total_ok += 1 if ok else 0
-                    total_fail += 0 if ok else 1
-                    time.sleep(random.uniform(DELAY_MIN, DELAY_MAX))
+        for komik_url in komik_list:
+            total_komik += 1
+            try:
+                process_komik(komik_url, total_komik)
+                total_ok += 1
+            except Exception as e:
+                log(f"    [!] Error komik: {e}")
+                total_fail += 1
+            time.sleep(DELAY_BETWEEN_KOMIK)
 
-        log(f"\n[✓] Ronde selesai! OK: {total_ok} | Gagal: {total_fail}")
-        log(f"[*] Tunggu {LOOP_INTERVAL//60} menit lalu ulang...\n")
-        time.sleep(LOOP_INTERVAL)
+    log("\n" + "="*50)
+    log(f"  SELESAI!")
+    log(f"  Total komik diproses : {total_komik}")
+    log(f"  Berhasil             : {total_ok}")
+    log(f"  Gagal                : {total_fail}")
+    log("="*50)
 
 if __name__ == "__main__":
     main()
