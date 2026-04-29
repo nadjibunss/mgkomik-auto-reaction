@@ -1,28 +1,45 @@
 # MGKomik Auto Reaction Bot 🤖
 
-Bot otomatis reaction di [web.mgkomik.cc](https://web.mgkomik.cc) — support **Docker** dan **Termux**.
+Bot otomatis reaction di [web.mgkomik.cc](https://web.mgkomik.cc)
 
-## 🐳 Deploy dengan Docker
+---
 
-### Cara 1 — Docker Compose (Direkomendasikan)
+## 🚀 Deploy di Cloud Terminal (Docker)
+
+### Step 1 — Clone repo
 ```bash
-# Clone repo
 git clone https://github.com/nadjibunss/mgkomik-auto-reaction
 cd mgkomik-auto-reaction
+```
 
-# Edit password dulu!
+### Step 2 — Edit password (WAJIB)
+```bash
 nano docker-compose.yml
+```
+Ganti bagian `PASSWORD=sukasari05` dengan password baru kamu.
 
-# Jalankan
+### Step 3 — Jalankan bot
+```bash
 docker-compose up -d
+```
 
-# Lihat log live
+### Step 4 — Lihat log live
+```bash
 docker-compose logs -f
 ```
 
-### Cara 2 — Docker biasa
+### Stop bot
+```bash
+docker-compose down
+```
+
+---
+
+## 🐳 Cara alternatif (tanpa docker-compose)
+
 ```bash
 docker build -t mgkomik-bot .
+
 docker run -d --name mgkomik-bot \
   -e USERNAME=Nasky \
   -e PASSWORD=PASSWORD_KAMU \
@@ -34,35 +51,33 @@ docker run -d --name mgkomik-bot \
 
 # Lihat log
 docker logs -f mgkomik-bot
+
+# Stop
+docker stop mgkomik-bot
 ```
 
-## 📱 Jalankan di Termux
-```bash
-pkg update && pkg install git python -y
-git clone https://github.com/nadjibunss/mgkomik-auto-reaction
-cd mgkomik-auto-reaction
-pip install -r requirements.txt
-python3 bot.py
-```
+---
 
-## ⚙️ Konfigurasi ENV
+## ⚙️ Konfigurasi ENV di docker-compose.yml
 
 | Variable | Default | Keterangan |
 |---|---|---|
 | `USERNAME` | `Nasky` | Username MGKomik |
-| `PASSWORD` | `sukasari05` | Password MGKomik |
+| `PASSWORD` | _(isi sendiri)_ | Password MGKomik |
 | `REACTION_TYPES` | `upvote,funny,love` | Reaction acak (pisah koma) |
-| `MAX_PAGES` | `2` | Jumlah halaman komik |
+| `MAX_PAGES` | `2` | Jumlah halaman komik discan |
 | `MAX_CHAPTERS_PER_KOMIK` | `5` | Chapter per komik |
 | `DELAY_MIN` | `3` | Delay min antar request (detik) |
 | `DELAY_MAX` | `7` | Delay max antar request (detik) |
 
+---
+
 ## 📋 Fitur
 - ✅ Login otomatis
 - ✅ Scan semua komik
-- ✅ Reaction di halaman komik & setiap chapter
+- ✅ Reaction di halaman komik & tiap chapter
 - ✅ Reaction acak: Upvote, Funny, Love, Surprised, Angry, Sad
 - ✅ Loop otomatis tiap 30 menit
-- ✅ Simpan log ke `logs/bot.log`
-- ✅ Konfigurasi via ENV variable (Docker-friendly)
-- ✅ Auto-restart jika container crash
+- ✅ Log tersimpan di `logs/bot.log`
+- ✅ Konfigurasi via ENV variable
+- ✅ Auto-restart jika container crash (`restart: unless-stopped`)
